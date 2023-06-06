@@ -1,5 +1,3 @@
-This artifact is published in AWS Prescriptive Guidance. Please look for the most updated info there: https://apg-library.amazonaws.com/content/419aaa80-1b97-402d-9c74-c1b8c1ddd1cb **(it will be updated once APG is public)**
-
 ## Summary
 AWS IAM Identity Center (successor to AWS Single Sign-On) helps you securely create or connect your workforce identities and manage their access centrally across AWS accounts and applications. IAM Identity Center is the recommended approach for workforce authentication and authorization on AWS for organizations of any size and type. Companies can bring their identities from their Microsoft Active Directory to assign them to AWS accounts with specific permissions. With the AWS Identity Center, you get a unified administration experience to define, customize, and assign fine-grained access.
 
@@ -232,3 +230,5 @@ See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more inform
 
 This library is licensed under the MIT-0 License. See the LICENSE file.
 
+## AWS Prescriptive Guidance
+This artifact is published in AWS Prescriptive Guidance. Please look for the most updated info there: https://docs.aws.amazon.com/prescriptive-guidance/latest/ **(it will be updated once APG is public)**
