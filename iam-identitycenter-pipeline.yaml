@@ -1,0 +1,1085 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'Create a CI/CD pipeline for AWS Single Sign On permission sets and assignments'
+
+## +-------
+## | Parameters
+## +--------------
+Parameters:
+  # Name of the project
+  nameConvention:
+    Description: 'Preffix that will be used to name resources in this stack (e.g. roles, events, pipeline)'
+    Type: String
+    Default: iam-identitycenter
+    
+  # Repository files
+  S3BucketCodeBucket:
+    Description: 'S3 bucket with the initial repository code. Must be created in advance.'
+    Type: String
+    Default: 'iam-identitycenter-initialcode'
+  S3BucketCodeKey:
+    Description: 'Name of the zip file with the repository initial code hosted in S3 bucket above'
+    Type: String
+    Default: 'iam-identitycenter.zip'
+
+  mgmtAccountId:
+    Description: 'Account ID of the management account.'
+    Type: String
+    Default: '002347648080'
+
+Resources:
+## +-------
+## | CodePipeline
+## +---------------
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn:
+      - triggerPipelineLambda
+    Properties:
+      RoleArn: !GetAtt PipelineRole.Arn
+      Name: !Sub '${nameConvention}-pipeline'
+      ArtifactStore:
+        Type: S3
+        Location: !Ref artifactsBucket      
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              Configuration:
+                RepositoryName: !GetAtt IdentityCenterRepository.Name
+                BranchName: main
+                PollForSourceChanges: false
+              OutputArtifacts:
+                - Name: CodeCommitOutput
+              RunOrder: 1
+        - Name: TemplateValidation
+          Actions:
+          - Name: TemplateValidation
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: '1'
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: !Ref CodebuildTemplateValidation
+            RunOrder: 1
+            InputArtifacts:
+              - Name: CodeCommitOutput
+            OutputArtifacts:
+              - Name: TemplateValidation     
+        - Name: PermissionSet
+          Actions:
+          - Name: PermissionSet
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: '1'
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: !Ref CodebuildPermissionSet
+            RunOrder: 1
+            InputArtifacts:
+              - Name: CodeCommitOutput
+            OutputArtifacts:
+              - Name: PermissionSetOutput
+        - Name: Assignments
+          Actions:
+          - Name: Assignments
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: '1'
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: !Ref CodebuildAssignments
+            RunOrder: 1
+            InputArtifacts:
+              - Name: CodeCommitOutput
+            OutputArtifacts:
+              - Name: AssignmentsOutput
+
+## +-------
+## | IAM Role (CodePipeline)
+## +---------------
+  PipelineRole:
+    Type: 'AWS::IAM::Role'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "ListAllMyBuckets requires * in Resource"
+          - id: W28
+            reason: "Fixed name required to future references"                 
+    Properties:
+      RoleName: !Sub ${nameConvention}-codepipeline-write
+      Description: 'Role for code pipeline'
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+      - PolicyName: !Sub ${nameConvention}-codepipeline-write
+        PolicyDocument:
+          Statement:
+            - Sid: CodeComitPermissions
+              Effect: Allow
+              Action:
+                - codecommit:ListBranches
+                - codecommit:ListRepositories
+                - codecommit:GetCommit
+                - codecommit:GetBranch
+                - codecommit:GetUploadArchiveStatus
+                - codecommit:GitPull
+                - codecommit:UploadArchive
+                - codecommit:CancelUploadArchive
+              Resource:
+                - !Sub "arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
+            - Sid: CodeBuildAccess
+              Effect: Allow
+              Action:              
+                - codebuild:BatchGetBuilds
+                - codebuild:StartBuild
+              Resource:
+                - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${nameConvention}-*"              
+            - Sid: S3AllAccess
+              Effect: Allow
+              Action:              
+                - s3:ListAllMyBuckets
+              Resource:
+                - "*"
+            - Sid: BucketPermissions
+              Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetBucketPolicy
+                - s3:GetObject
+                - s3:GetBucketAcl
+                - s3:GetBucketLocation
+              Resource:
+               - !Sub 'arn:aws:s3:::${artifactsBucket}/*'
+               - !Sub 'arn:aws:s3:::${artifactsBucket}*'
+               - !Sub 'arn:aws:s3:::${S3BucketCodeBucket}/*'
+               - !Sub 'arn:aws:s3:::${S3BucketCodeBucket}*'
+
+## +-------
+## | Repository (Identity Center Management)
+## +--------------
+  IdentityCenterRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryDescription: 'Repository to control AWS Identity Center Permission Sets and assignments'
+      RepositoryName: !Sub '${nameConvention}-repository'
+      Code:
+        BranchName: 'main'
+        S3:
+          Bucket: !Ref S3BucketCodeBucket
+          Key: !Ref 'S3BucketCodeKey'
+
+
+## +-------
+## | CodeBuild Project (Template Validation)
+## +---------------
+  CodebuildTemplateValidation:
+    Type: AWS::CodeBuild::Project
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W32
+            reason: "No relevant artifact produced in projects. S3 bucekt is also encrypted with managed key"       
+    Properties:
+        Name: !Sub ${nameConvention}-templatevalidation
+        ServiceRole: !GetAtt RoleCodebuildTemplateValidation.Arn
+        EncryptionKey: !GetAtt KmsKeyS3.Arn
+        Environment:
+            ComputeType: BUILD_GENERAL1_SMALL
+            Image: "aws/codebuild/amazonlinux2-x86_64-standard:3.0"
+            Type: LINUX_CONTAINER
+            EnvironmentVariables:
+              - Name: IDENTITYCENTER_REPOSITORY
+                Value: !GetAtt IdentityCenterRepository.Name      
+              - Name: REGION
+                Value: !Sub ${AWS::Region}                          
+        Artifacts:
+            Type: CODEPIPELINE
+        TimeoutInMinutes: 480
+        Source:
+            Type: CODEPIPELINE
+            BuildSpec: |
+              version: 0.2
+              phases:
+                install:
+                  commands:
+                    - echo "[INFO] [INSTALL] Installing dependencies"
+                    - pip install git-remote-codecommit
+                    - echo "[INFO] [INSTALL] Installing finished"
+                build:
+                  commands:
+                    - echo "[INFO] [BUILD] Cloning AWS SSO repository"
+                    - rm -rf $IDENTITYCENTER_REPOSITORY
+                    - git clone codecommit::$REGION://$IDENTITYCENTER_REPOSITORY
+                    - cd $IDENTITYCENTER_REPOSITORY
+                    - cd source/validation/
+                    - chmod +x iam-identitycenter-validation.py
+                    - python3 iam-identitycenter-validation.py --ps-folder '../../templates/permissionsets/' --assignments-folder '../../templates/assignments/'
+
+## +-------
+## | IAM Service Role (Template Validation)
+## +---------------
+  RoleCodebuildTemplateValidation:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "Requires * in Resource to get all policies"    
+          - id: W28
+            reason: "Fixed name required to future references"                
+    Properties:
+      RoleName: !Sub ${nameConvention}-tempvalidation-read
+      Description: 'Service role for CodeBuild'
+      Policies:
+        - PolicyName: !Sub ${nameConvention}-tempvalidation-read
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: CodeComitPermissions
+                Effect: Allow
+                Action:
+                  - codecommit:ListBranches
+                  - codecommit:ListRepositories
+                  - codecommit:GetCommit
+                  - codecommit:GetBranch
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:GitPull
+                  - codecommit:UploadArchive
+                  - codecommit:CancelUploadArchive
+                Resource:
+                  - !Sub "arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
+              - Sid: CodeBuildAccess
+                Effect: Allow
+                Action:              
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource:
+                  - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${nameConvention}-*"   
+              - Sid: Logs
+                Effect: Allow
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${nameConvention}*:*'
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+              - Sid: Buckets
+                Effect: Allow
+                Action:
+                  - 's3:PutObject'
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketAcl'
+                  - 's3:GetBucketLocation'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${artifactsBucket}*/*'                  
+              - Sid: CodeRepos
+                Effect: Allow
+                Resource:
+                  - !GetAtt IdentityCenterRepository.Arn
+                Action:
+                  - 'codecommit:GitPull'
+              - Sid: CodeBuild
+                Effect: Allow
+                Action:
+                  - 'codebuild:CreateReportGroup'
+                  - 'codebuild:CreateReport'
+                  - 'codebuild:UpdateReport'
+                  - 'codebuild:BatchPutTestCases'
+                  - 'codebuild:BatchPutCodeCoverages'
+                Resource:
+                  - !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${nameConvention}*'
+              - Sid: SpecificPermissions
+                Effect: Allow
+                Action:
+                  - access-analyzer:ValidatePolicy
+                  - iam:GetPolicy
+                Resource:
+                  - '*'                  
+              - Sid: KMSPermission
+                Effect: Allow
+                Action:
+                  - 'kms:Encrypt'
+                  - 'kms:Decrypt'
+                  - 'kms:ReEncrypt*'
+                  - 'kms:GenerateDataKey*'
+                  - 'kms:DescribeKey'
+                Resource:
+                  - !GetAtt KmsKeyS3.Arn
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 'codebuild.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+
+## +-------
+## | CodeBuild Project (Permission Set)
+## +---------------
+  CodebuildPermissionSet:
+    Type: AWS::CodeBuild::Project
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W32
+            reason: "No relevant artifact produced in projects. S3 bucekt is also encrypted with managed key"           
+    Properties:
+        Name: !Sub ${nameConvention}-permissionset
+        ServiceRole: !GetAtt RoleCodebuildPermissionSets.Arn
+        EncryptionKey: !GetAtt KmsKeyS3.Arn
+        Environment:
+            ComputeType: BUILD_GENERAL1_SMALL
+            Image: "aws/codebuild/amazonlinux2-x86_64-standard:3.0"
+            Type: LINUX_CONTAINER
+            EnvironmentVariables:
+              - Name: IDENTITYCENTER_REPOSITORY
+                Value: !GetAtt IdentityCenterRepository.Name
+              - Name: REGION
+                Value: !Sub ${AWS::Region}
+        Artifacts:
+            Type: CODEPIPELINE
+        TimeoutInMinutes: 480
+        Source:
+            Type: CODEPIPELINE
+            BuildSpec: |
+              version: 0.2
+              phases:
+                install:
+                  commands:
+                    - echo "[INFO] [INSTALL] Installing dependencies"
+                    - pip install git-remote-codecommit
+                    - echo "[INFO] [INSTALL] Installing finished"
+                build:
+                  commands:
+                    - echo "[INFO] [BUILD] Cloning AWS Identity Center repository"
+                    - rm -rf $IDENTITYCENTER_REPOSITORY
+                    - git clone codecommit::$REGION://$IDENTITYCENTER_REPOSITORY
+                    - cd $IDENTITYCENTER_REPOSITORY
+                    - cd source/permissionsets
+                    - chmod +x iam-identitycenter-permissionset.py
+                    - python3 iam-identitycenter-permissionset.py
+
+
+## +-------
+## | IAM Service Role (Permission Set)
+## +---------------
+  RoleCodebuildPermissionSets:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "Requires * in Resource to interact with all Identity Center resources"    
+          - id: W28
+            reason: "Fixed name required to future references"        
+    Properties:
+      RoleName: !Sub ${nameConvention}-permissionset-write
+      Description: 'Service role for CodeBuild'
+      Policies:
+        - PolicyName: !Sub ${nameConvention}-permissionset-write
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: CodeComitPermissions
+                Effect: Allow
+                Action:
+                  - codecommit:ListBranches
+                  - codecommit:ListRepositories
+                  - codecommit:GetCommit
+                  - codecommit:GetBranch
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:GitPull
+                  - codecommit:UploadArchive
+                  - codecommit:CancelUploadArchive
+                Resource:
+                  - !Sub "arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
+              - Sid: CodeBuildAccess
+                Effect: Allow
+                Action:              
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource:
+                  - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${nameConvention}-*"   
+              - Sid: Logs
+                Effect: Allow
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${nameConvention}*:*'
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+              - Sid: Buckets
+                Effect: Allow
+                Action:
+                  - 's3:PutObject'
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketAcl'
+                  - 's3:GetBucketLocation'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${artifactsBucket}*/*'                  
+              - Sid: CodeRepos
+                Effect: Allow
+                Resource:
+                  - !GetAtt IdentityCenterRepository.Arn
+                Action:
+                  - 'codecommit:GitPull'
+              - Sid: CodeBuild
+                Effect: Allow
+                Action:
+                  - 'codebuild:CreateReportGroup'
+                  - 'codebuild:CreateReport'
+                  - 'codebuild:UpdateReport'
+                  - 'codebuild:BatchPutTestCases'
+                  - 'codebuild:BatchPutCodeCoverages'
+                Resource:
+                  - !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${nameConvention}*'
+              - Sid: SpecificPermissions
+                Effect: Allow
+                Action:
+                  - sso:ProvisionPermissionSet
+                  - sso:ListPermissionSets
+                  - sso:DeletePermissionsPolicy
+                  - sso:PutPermissionsPolicy
+                  - sso:PutInlinePolicyToPermissionSet
+                  - sso:DeleteInlinePolicyToPermissionSet
+                  - sso:DescribePermissionSet
+                  - sso:GetPermissionSet
+                  - sso:AttachManagedPolicyToPermissionSet
+                  - sso:CreatePermissionSet
+                  - sso:UpdatePermissionSet
+                  - sso:ListTagsForResource
+                  - sso:ListManagedPoliciesInPermissionSet
+                  - sso:DescribeAccountAssignmentDeletionStatus
+                  - sso:DeletePermissionSet
+                  - sso:TagResource
+                  - sso:DetachManagedPolicyFromPermissionSet
+                  - sso:DeleteInlinePolicyFromPermissionSet
+                  - sso:AttachCustomerManagedPolicyReferenceToPermissionSet
+                  - sso:DeletePermissionsBoundaryFromPermissionSet
+                  - sso:ListCustomerManagedPolicyReferencesInPermissionSet
+                  - sso:PutPermissionsBoundaryToPermissionSet
+                  - sso:DetachCustomerManagedPolicyReferenceFromPermissionSet
+                  - sso:GetPermissionsBoundaryForPermissionSet
+                  - sso:ListInstances
+                Resource:
+                  - '*'  
+              - Sid: KMSPermission
+                Effect: Allow
+                Action:
+                  - 'kms:Encrypt'
+                  - 'kms:Decrypt'
+                  - 'kms:ReEncrypt*'
+                  - 'kms:GenerateDataKey*'
+                  - 'kms:DescribeKey'
+                Resource:
+                  - !GetAtt KmsKeyS3.Arn                                  
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 'codebuild.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+
+## +-------
+## | CodeBuild Project (Assignments)
+## +---------------
+  CodebuildAssignments:
+    Type: AWS::CodeBuild::Project
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W32
+            reason: "No relevant artifact produced in projects. S3 bucekt is also encrypted with managed key"           
+    Properties:
+        Name: !Sub ${nameConvention}-assignments
+        ServiceRole: !GetAtt RoleCodebuildAssignments.Arn
+        EncryptionKey: !GetAtt KmsKeyS3.Arn
+        Environment:
+            ComputeType: BUILD_GENERAL1_SMALL
+            Image: "aws/codebuild/amazonlinux2-x86_64-standard:3.0"
+            Type: LINUX_CONTAINER
+            EnvironmentVariables:
+              - Name: IDENTITYCENTER_REPOSITORY
+                Value: !GetAtt IdentityCenterRepository.Name
+              - Name: REGION
+                Value: !Sub ${AWS::Region}
+              - Name: ORG_ROLE
+                Value: !Sub 'arn:aws:iam::${mgmtAccountId}:role/${nameConvention}-org-lookup-read'
+              - Name: TERRAFORM_STATE
+                Value: !Ref tfStateBucket                
+              - Name: MGMT_ACCOUNT
+                Value: !Ref mgmtAccountId    
+                
+        Artifacts:
+            Type: CODEPIPELINE
+        TimeoutInMinutes: 480
+        Source:
+            Type: CODEPIPELINE
+            BuildSpec: |
+              version: 0.2
+              phases:
+                install:
+                  commands:
+                    - echo "[INFO] [INSTALL] Installing dependencies"
+                    - pip install git-remote-codecommit
+                    - echo "[INFO] [INSTALL] Installing finished"
+                    - wget https://releases.hashicorp.com/terraform/1.4.4/terraform_1.4.4_linux_amd64.zip
+                    - unzip terraform_1.4.4_linux_amd64.zip -d /usr/bin/
+                    - chmod +x /usr/bin/terraform
+                  finally:
+                    - terraform --version
+                build:
+                  commands:
+                    - echo "[INFO] [BUILD] Cloning AWS Identity Center repository"
+                    - rm -rf $IDENTITYCENTER_REPOSITORY
+                    - git clone codecommit::$REGION://$IDENTITYCENTER_REPOSITORY
+                    - cd $IDENTITYCENTER_REPOSITORY
+                    - cd source/assignments/
+                    - chmod +x iam-identitycenter-assignments.py
+                    - python3 iam-identitycenter-assignments.py --org_role $ORG_ROLE --mgmt_account $MGMT_ACCOUNT
+                    - terraform init -backend-config="bucket=$TERRAFORM_STATE" -backend-config="key=assignments.tfstate" -backend-config="region=$REGION" 
+                    - terraform plan
+                    - terraform apply -auto-approve
+
+## +-------
+## | IAM Service Role (Assignments)
+## +---------------
+  RoleCodebuildAssignments:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "Requires * in Resource to interact with all Identity Center resources"    
+          - id: W28
+            reason: "Fixed name required to future references"         
+    Properties:
+      RoleName: !Sub ${nameConvention}-assignments-write
+      Description: 'Service role for CodeBuild'
+      Policies:
+        - PolicyName: !Sub ${nameConvention}-assignments-write
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: CodeComitPermissions
+                Effect: Allow
+                Action:
+                  - codecommit:ListBranches
+                  - codecommit:ListRepositories
+                  - codecommit:GetCommit
+                  - codecommit:GetBranch
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:GitPull
+                  - codecommit:UploadArchive
+                  - codecommit:CancelUploadArchive
+                Resource:
+                  - !Sub "arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
+              - Sid: CodeBuildAccess
+                Effect: Allow
+                Action:              
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource:
+                  - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${nameConvention}-*"   
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${nameConvention}*:*'                  
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${nameConvention}*'                  
+              - Sid: Buckets
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetBucketPolicy
+                  - s3:GetObject
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub 'arn:aws:s3:::${artifactsBucket}*/*'  
+                  - !Sub 'arn:aws:s3:::${tfStateBucket}*/*'  
+              - Sid: CodeRepos
+                Effect: Allow
+                Resource:
+                  - !GetAtt IdentityCenterRepository.Arn
+                Action:
+                  - 'codecommit:GitPull'
+              - Sid: CodeBuild
+                Effect: Allow
+                Action:
+                  - 'codebuild:CreateReportGroup'
+                  - 'codebuild:CreateReport'
+                  - 'codebuild:UpdateReport'
+                  - 'codebuild:BatchPutTestCases'
+                  - 'codebuild:BatchPutCodeCoverages'
+                Resource:
+                  - !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${nameConvention}*'
+              - Sid: SpecificPermissions
+                Effect: Allow
+                Action:
+                  - 'sso:ListPermissionSets'
+                  - 'sso:ListTagsForResource'
+                  - 'sso:DescribePermissionSet'
+                  - 'sso:ListInstances'
+                  - 'sso:DescribeAccountAssignmentCreationStatus'
+                  - 'organizations:ListAccounts'
+                  - 'organizations:ListAccountsForParent'
+                  - 'organizations:ListOrganizationalUnitsForParent'
+                  - 'organizations:ListRoots'
+                  - 'sso:CreateAccountAssignment'
+                  - 'sso:DeleteAccountAssignment'
+                  - 'sso:ListAccountsForProvisionedPermissionSet'
+                  - 'sso:DescribeAccountAssignmentDeletionStatus'
+                  - 'sso:ListAccountAssignments'
+                  - 'identitystore:ListGroups'
+                  - 'identitystore:ListUsers'
+                  - 'iam:GetSAMLProvider'
+                  - 'iam:CreateRole'
+                  - 'iam:PutRolePolicy'
+                  - 'iam:AttachRolePolicy'
+                  - 'iam:GetRole'
+                  - 'iam:ListAttachedRolePolicies'
+                  - 'iam:ListRolePolicies'
+                Resource:
+                  - "*"   
+              - Sid: KMSPermission
+                Effect: Allow
+                Action:
+                  - 'kms:Encrypt'
+                  - 'kms:Decrypt'
+                  - 'kms:ReEncrypt*'
+                  - 'kms:GenerateDataKey*'
+                  - 'kms:DescribeKey'
+                Resource:
+                  - !GetAtt KmsKeyS3.Arn         
+              - Sid: AssumeRoleOrg
+                Effect: Allow
+                Action:
+                  - 'sts:AssumeRole'
+                Resource:
+                  - !Sub 'arn:aws:iam::${mgmtAccountId}:role/${nameConvention}-org-lookup-read'                          
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 'codebuild.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+
+## +-------
+## | EventBridge (Trigger)
+## +---------------
+  triggerPipelineCodeChange:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ${nameConvention}-codechange-trigger
+      Description: "Rule to trigger the CodePipeline based on code changes"
+      EventPattern:
+        source:
+          - "aws.codecommit"
+        detail-type:
+          - "CodeCommit Repository State Change"
+        resources:
+          - !GetAtt IdentityCenterRepository.Arn
+      Targets:
+        -
+          Arn: !GetAtt triggerPipelineLambda.Arn
+          Id: "LambdaTrigger"
+
+## +-------
+## | EventBridge (Trigger)
+## +---------------
+  triggerPipelineAccountMove:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ${nameConvention}-moveaccount-trigger
+      Description: "Rule to trigger the CodePipeline based on AWS account OU movement."
+      EventPattern:
+        source:
+          - "aws.organizations"
+        detail-type:
+          - "AWS API Call via CloudTrail"
+        detail:
+          eventSource: 
+          - organizations.amazonaws.com
+          eventName:
+          - MoveAccount
+      Targets:
+        -
+          Arn: !GetAtt triggerPipelineLambda.Arn
+          Id: "LambdaTrigger"
+
+## +-------
+## | Lambda Permission (Trigger)
+## +---------------
+  PermissionForEventsToInvokeLambdaCodeChange: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: !Ref "triggerPipelineLambda"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "triggerPipelineAccountMove"
+          - "Arn"
+
+## +-------
+## | Lambda Permission (Trigger)
+## +---------------
+  PermissionForEventsToInvokeLambdaMoveAccount: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: !Ref "triggerPipelineLambda"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "triggerPipelineCodeChange"
+          - "Arn"
+
+## +-------
+## | Lambda (Trigger)
+## +---------------
+  triggerPipelineLambda:
+    Type: 'AWS::Lambda::Function'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: "Lambda not required in VPC for this use case"          
+    Properties:
+      FunctionName: !Sub ${nameConvention}-codecommit-trigger
+      Handler: 'index.lambda_handler'
+      Environment:
+        Variables:
+          PIPELINE_NAME:
+            !Sub '${nameConvention}-pipeline'
+      MemorySize: 128
+      Role: !GetAtt 'LambdaTriggerRole.Arn'
+      Runtime: 'python3.9'
+      Timeout: 900
+      ReservedConcurrentExecutions: 5
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+
+          codepipeline_name = os.environ['PIPELINE_NAME']
+          files_to_ignore = ["readme.md","iam-ssopipeline.yaml","license","changelog.md","iam-identitycenter.drawio","iam-identitycenter.png"]
+
+          codecommit_client = boto3.client('codecommit')
+          codepipeline_client = boto3.client('codepipeline')
+
+          def lambda_handler(event, context):
+              if event['source'] == 'aws.codecommit':
+                  # Extract commits
+                  old_commit_id = event["detail"]["oldCommitId"]
+                  new_commit_id = event["detail"]["commitId"]
+                  repoName = event["detail"]["repositoryName"]
+
+                  # Get commit differences
+                  codecommit_response = codecommit_client.get_differences(
+                      repositoryName=repoName,
+                      beforeCommitSpecifier=str(old_commit_id),
+                      afterCommitSpecifier=str(new_commit_id)
+                  )
+
+                  # Search commit differences for files to ignore
+                  for difference in codecommit_response["differences"]:
+                      if difference['changeType'] != 'D':
+                          file_path = difference["afterBlob"]["path"].lower()
+                          file_name = file_path.split('/')[-1]
+                          # If non-ignored file is present, kickoff pipeline
+                          if file_name not in files_to_ignore:
+                              print('[INFO] A change in relevant files was made. Starting the pipeline')
+                              codepipeline_response = codepipeline_client.start_pipeline_execution(
+                                  name=codepipeline_name
+                                  )
+                              # Break to avoid executing the pipeline twice
+                              break
+                          print('[INFO] Files that were changed does not trigger the pipeline')
+                      else:
+                          file_path = difference["beforeBlob"]["path"].lower()
+                          file_name = file_path.split('/')[-1]
+                          # If non-ignored file is present, kickoff pipeline
+                          if file_name not in files_to_ignore:
+                              print('[INFO] A change in relevant files was made. Starting the pipeline')
+                              codepipeline_response = codepipeline_client.start_pipeline_execution(
+                                  name=codepipeline_name
+                                  )
+                              # Break to avoid executing the pipeline twice
+                              break
+                          print('[INFO] Files that were changed does not trigger the pipeline')
+
+## +-------
+## | IAM Role (Lambda Trigger)
+## +---------------
+  LambdaTriggerRole:
+    Type: 'AWS::IAM::Role'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "Fixed name required to future references"             
+    Properties:
+      RoleName: !Sub ${nameConvention}-pipelinetrigger-write
+      Description: 'Role that the Lambda will use to trigger pipeline'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 'lambda.amazonaws.com'
+          Action:
+          - 'sts:AssumeRole'
+        - Effect: Allow
+          Principal:
+            AWS: !Sub ${mgmtAccountId}
+          Action:
+          - 'sts:AssumeRole'
+      Path: '/'
+      ManagedPolicyArns:
+      - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+      - PolicyName: !Sub ${nameConvention}-pipelinetrigger
+        PolicyDocument:
+          Version: 2012-10-17        
+          Statement:
+            - Sid: CodeComitPerm
+              Effect: Allow
+              Action:
+                - codecommit:List*
+                - codecommit:Get*
+              Resource:
+                - !GetAtt IdentityCenterRepository.Arn
+            - Sid: CodePipelinePerm
+              Effect: Allow
+              Action:
+                - codepipeline:StartPipelineExecution
+              Resource:
+               - !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${nameConvention}-pipeline
+
+
+## +-------
+## | S3 Bucket Artifact 
+## +---------------
+  tfStateBucket:
+    Type: 'AWS::S3::Bucket'    
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: "There is no need to enable log in this bucket."            
+    Properties:
+      BucketName: !Sub ${nameConvention}-${AWS::AccountId}-tf-state
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'aws:kms'
+              KMSMasterKeyID: !Ref KmsKeyS3              
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  tfStateBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref tfStateBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: HTTPSOnly
+            Effect: Deny
+            Principal:
+              AWS: "*"
+            Action:
+              - s3:*
+            Resource: 
+            - !Sub arn:aws:s3:::${tfStateBucket}/*
+            - !Sub arn:aws:s3:::${tfStateBucket}
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Sid: AllowCodeBuild
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt RoleCodebuildAssignments.Arn
+            Action:
+              - s3:*
+            Resource: 
+            - !Sub arn:aws:s3:::${tfStateBucket}/*
+            - !Sub arn:aws:s3:::${tfStateBucket}
+
+
+## +-------
+## | S3 Bucket Artifact 
+## +---------------
+  artifactsBucket:
+    Type: 'AWS::S3::Bucket'    
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: "There is no need to enable log in this bucket."            
+    Properties:
+      BucketName: !Sub ${nameConvention}-${AWS::AccountId}-artfcs
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'aws:kms'
+              KMSMasterKeyID: !Ref KmsKeyS3              
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  localBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref artifactsBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: HTTPSOnly
+            Effect: Deny
+            Principal:
+              AWS: "*"
+            Action:
+              - s3:*
+            Resource: 
+            - !Sub arn:aws:s3:::${artifactsBucket}/*
+            - !Sub arn:aws:s3:::${artifactsBucket}
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  KmsKeyAliasS3:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName:  !Sub "alias/${nameConvention}/s3"
+      TargetKeyId: !Ref KmsKeyS3
+  
+  KmsKeyS3:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS Key for S3
+      Enabled: True
+      EnableKeyRotation: true
+      KeyUsage: ENCRYPT_DECRYPT
+      KeyPolicy:
+        {
+          "Version": "2012-10-17",
+          "Id": "s3-kms-policy",
+          "Statement":
+            [
+              {
+                "Sid": "Enable IAM User Permissions",
+                "Effect": "Allow",
+                "Principal":
+                  { "AWS": !Sub "arn:aws:iam::${AWS::AccountId}:root" },
+                "Action":
+                  [
+                    "kms:Encrypt",
+                    "kms:Decrypt",
+                    "kms:ReEncrypt*",
+                    "kms:GenerateDataKey*",
+                    "kms:CreateGrant",
+                    "kms:DescribeKey",
+                  ],
+                "Resource": "*",
+                "Condition":
+                  {
+                    "StringEquals":
+                      {
+                        "kms:CallerAccount": !Sub "${AWS::AccountId}",
+                        "kms:ViaService": !Sub "s3.${AWS::Region}.amazonaws.com",
+                      },
+                  },
+              },
+              {
+                "Sid": "Allow direct access to key metadata to the account",
+                "Effect": "Allow",
+                "Principal":
+                  { "AWS": !Sub "arn:aws:iam::${AWS::AccountId}:root" },
+                "Action":
+                  ["kms:Describe*", "kms:Get*", "kms:List*", "kms:RevokeGrant"],
+                "Resource": "*",
+              },
+              {
+                "Sid": "Allow access for Key Administrators",
+                "Effect": "Allow",
+                "Principal":
+                  {
+                    "AWS": !Sub "arn:aws:iam::${AWS::AccountId}:root",
+                  },
+                "Action":
+                  [
+                    "kms:Create*",
+                    "kms:Describe*",
+                    "kms:Enable*",
+                    "kms:List*",
+                    "kms:Put*",
+                    "kms:Update*",
+                    "kms:Revoke*",
+                    "kms:Disable*",
+                    "kms:Get*",
+                    "kms:Delete*",
+                    "kms:TagResource",
+                    "kms:UntagResource",
+                    "kms:ScheduleKeyDeletion",
+                    "kms:CancelKeyDeletion",
+                  ],
+                "Resource": "*",
+              },
+            ],
+        }

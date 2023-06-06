@@ -1,0 +1,43 @@
+{
+    "Assignments": [
+        {
+            "SID": "SecurityAssignment",
+            "Target": [
+                "ou-xxxx-yyyyyyyy",
+                "ou-zzzz-xxxxxxxx",
+                "123456789012"
+            ],
+            "PrincipalType": "GROUP",
+            "PrincipalId": "AD_SECURITY_ADMIN@domain.internal",
+            "PermissionSetName": "SecurityEngineer"
+        },
+        {
+            "SID": "PersonalAdmin",
+            "Target": [
+                "r-xxxx"
+            ],
+            "PrincipalType": "USER",
+            "PrincipalId": "my_user@domain.internal",
+            "PermissionSetName": "ProductOwner"
+        },
+        {
+            "SID": "Specificaccounts",
+            "Target": [
+                "098765432101",
+                "123456789012"
+            ],
+            "PrincipalType": "GROUP",
+            "PrincipalId": "AD_PRODUCT_OWNER@domain.internal",
+            "PermissionSetName": "ProductOwner"
+        },
+        {
+            "SID": "DatabaseBaseline",
+            "Target": [
+                "ou-xxxx-yyyyyyyy"
+            ],
+            "PrincipalType": "GROUP",
+            "PrincipalId": "AD_DB_ADMIN@domain.internal",
+            "PermissionSetName": "DatabaseAdministrator"
+        }
+    ]
+}

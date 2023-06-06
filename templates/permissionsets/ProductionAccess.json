@@ -1,0 +1,60 @@
+{
+    "Name": "ProductionAccess",
+    "Description": "Production access in AWS",
+    "SessionDuration": "PT4H",
+    "ManagedPolicies": [
+        "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess"
+    ],
+    "CustomPolicy":{
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "ProductionAllowAccess",
+                "Effect": "Allow",
+                "Action": [
+                    "autoscaling-plans:UpdateScalingPlan",
+                    "autoscaling:PutScheduledUpdateGroupAction",
+                    "autoscaling:SetDesiredCapacity",
+                    "autoscaling:UpdateAutoScalingGroup",                
+                    "aws-portal:ViewAccount",
+                    "aws-portal:ViewBilling",
+                    "aws-portal:ViewPaymentMethods",
+                    "aws-portal:ViewUsage",
+                    "budgets:ViewBudget",
+                    "ec2:AttachVolume",
+                    "ec2:DetachVolume",
+                    "ec2:ModifyVolume",
+                    "ec2:StartInstances",
+                    "ec2:RebootInstances",
+                    "ec2:TerminateInstances",
+                    "ec2:RunInstances",          
+                    "ecs:StopTask",
+                    "ecs:StartTask",
+                    "ecs:UpdateService",                      
+                    "eks:AccessKubernetesApi",
+                    "eks:Describe*",
+                    "eks:ListTagsForResource",
+                    "iam:Get*",
+                    "iam:*CredentialReport",
+                    "iam:CreateServiceLinkedRole",
+                    "iam:PassRole",
+                    "logs:GetLogEvents",
+                    "route53domains:Get*",
+                    "route53domains:List*",                
+                    "ssm:DescribeSessions",
+                    "ssm:ResumeSession",
+                    "ssm:TerminateSession",
+                    "ssm:StartSession",
+                    "ssm:GetConnectionStatus",
+                    "ssm:*Automation*",
+                    "ssm:*Document*",
+                    "support:*",
+                    "wellarchitected:*"
+                ],
+                "Resource": "*"
+            }
+        ]
+    }
+}
+
+

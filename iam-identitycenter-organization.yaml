@@ -1,0 +1,194 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'IAM role to lookup information in AWS Organization'
+Parameters:
+  # Name of the project
+  nameConvention:
+    Description: 'Name of the project that will be used in different parts of this template'
+    Type: String
+    Default: 'iam-identitycenter'
+  identityCenterAccountId:
+    Description: 'Name of the project that will be used in different parts of this template'
+    Type: String
+    Default: "214274217571"
+  pipelineRegion:
+    Description: 'Name of the project that will be used in different parts of this template'
+    Type: String
+    Default: "us-east-2"
+
+Resources:
+## +-------
+## | IAM Service Role (Assignments)
+## +---------------
+  orgRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "Requires * in Resource to interact with all Identity Center resources"    
+          - id: W28
+            reason: "Fixed name required to future references"         
+    Properties:
+      RoleName: !Sub ${nameConvention}-org-lookup-read
+      Description: 'Service role for CodeBuild'
+      Policies:
+        - PolicyName: !Sub ${nameConvention}-read
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: CodeComitPermissions
+                Effect: Allow
+                Action:
+                  - organizations:List*
+                  - organizations:Describe*
+                Resource:
+                  - "*"                
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${identityCenterAccountId}:role/${nameConvention}-assignments-write'
+            Action:
+              - 'sts:AssumeRole'
+
+
+## +-------
+## | EventBridge (Trigger)
+## +---------------
+  triggerPipelineAccountMove:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ${nameConvention}-moveaccount-trigger
+      Description: "Rule to trigger the CodePipeline based on AWS account OU movement."
+      EventPattern:
+        source:
+          - "aws.organizations"
+        detail-type:
+          - "AWS API Call via CloudTrail"
+        detail:
+          eventSource: 
+          - organizations.amazonaws.com
+          eventName:
+          - MoveAccount
+      Targets:
+        -
+          Arn: !GetAtt triggerPipelineLambda.Arn
+          Id: "LambdaTrigger"
+
+## +-------
+## | Lambda Permission (Trigger)
+## +---------------
+  PermissionForEventsToInvokeLambdaCodeChange: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: !Ref "triggerPipelineLambda"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "triggerPipelineAccountMove"
+          - "Arn"
+
+## +-------
+## | Lambda (Trigger)
+## +---------------
+  triggerPipelineLambda:
+    Type: 'AWS::Lambda::Function'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: "Lambda not required in VPC for this use case"          
+    Properties:
+      FunctionName: !Sub ${nameConvention}-moveou-trigger
+      Handler: 'index.lambda_handler'
+      Environment:
+        Variables:
+          PIPELINE_NAME:
+            !Sub '${nameConvention}-pipeline'
+          IC_ROLE:
+            !Sub 'arn:aws:iam::${identityCenterAccountId}:role/${nameConvention}-pipelinetrigger-write'    
+          PIPELINE_REGION:
+            !Sub '${pipelineRegion}'
+      MemorySize: 128
+      Role: !GetAtt 'LambdaTriggerRole.Arn'
+      Runtime: 'python3.9'
+      Timeout: 900
+      ReservedConcurrentExecutions: 5
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+
+          # Assume role in Identity Center account
+          ic_role = os.environ['IC_ROLE']
+          region = os.environ['PIPELINE_REGION']
+          sts_client = boto3.client('sts')
+          assumed_role_object=sts_client.assume_role(RoleArn=ic_role,RoleSessionName="identity-center")
+          credentials=assumed_role_object['Credentials']
+
+          codepipeline_name = os.environ['PIPELINE_NAME']
+          files_to_ignore = ["readme.md","iam-identitycenter-organization.yaml","license","changelog.md","iam-identitycenter.drawio","iam-identitycenter.png","iam-identitycenter-pipeline.yaml"]
+
+          codepipeline_client = boto3.client('codepipeline', region_name=region, aws_access_key_id=credentials['AccessKeyId'], aws_secret_access_key=credentials['SecretAccessKey'], aws_session_token=credentials['SessionToken'])
+
+          def lambda_handler(event, context):
+              if event['source'] == 'aws.organizations':
+                  if event['detail']['eventName'] == 'MoveAccount':
+                      print('[INFO] An AWS account was moved to another OU. Starting the pipeline ')
+                      codepipeline_response = codepipeline_client.start_pipeline_execution(
+                          name=codepipeline_name
+                          )
+
+## +-------
+## | IAM Role (Lambda Trigger)
+## +---------------
+  LambdaTriggerRole:
+    Type: 'AWS::IAM::Role'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "Fixed name required to future references"             
+    Properties:
+      RoleName: !Sub ${nameConvention}-assumerole-write
+      Description: 'Role that the Lambda will use to trigger pipeline'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 'lambda.amazonaws.com'
+          Action:
+          - 'sts:AssumeRole'
+      Path: '/'
+      ManagedPolicyArns:
+      - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+      - PolicyName: !Sub ${nameConvention}-moveou
+        PolicyDocument:
+          Version: 2012-10-17        
+          Statement:
+            - Sid: CodeComitPerm
+              Effect: Allow
+              Action:
+                - sts:AssumeRole
+              Resource:
+                - !Sub 'arn:aws:iam::${identityCenterAccountId}:role/${nameConvention}-pipelinetrigger-write'
+

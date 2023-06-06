@@ -1,0 +1,74 @@
+{
+    "Name": "ProductOwner",
+    "Description": "Owner of a specific account.",
+    "SessionDuration": "PT4H",
+    "ManagedPolicies": [
+        "arn:aws:iam::aws:policy/AdministratorAccess"
+    ],
+    "CustomPolicy": {
+        "Version": "2012-10-17",
+        "Statement": [     
+            {
+                "Sid": "DenyRiskyActions",
+                "Effect": "Deny",
+                "Action": [
+                    "account:PutAlternateContact",
+                    "account:EnableRegion",
+                    "account:DisableRegion",
+                    "account:DeleteAlternateContact",
+                    "aws-portal:Modify*",
+                    "config:Delete*",
+                    "config:Stop*",
+                    "config:Put*",
+                    "config:Start*",
+                    "cloudtrail:Start*",
+                    "cloudtrail:Stop*",
+                    "cloudtrail:Delete*",
+                    "cloudtrail:Put*",
+                    "controltower:*",
+                    "ds:Create*",
+                    "ds:Disable*",
+                    "ds:Delete*",
+                    "ds:Enable*",
+                    "detective:*",
+                    "guardduty:*",
+                    "inspector:*",
+                    "inspector2:Disable",
+                    "inspector2:Delete*",
+                    "inspector2:Enable*",
+                    "inspector2:CancelFindingsReport",
+                    "inspector2:AssociateMember",
+                    "inspector2:DisassociateMember",
+                    "iam:Create*",
+                    "iam:Delete*",
+                    "iam:Update*",
+                    "sts:AssumeRole",
+                    "fms:*",
+                    "waf:*",
+                    "waf-regional:*",
+                    "wafv2:Create*",
+                    "wafv2:Delete*",
+                    "wafv2:Update*",
+                    "route53domains:*",
+                    "sso:*",
+                    "s3:PutBucketPublicAccessBlock",
+                    "securityhub:Create*",
+                    "securityhub:*Enable*",
+                    "securityhub:Disable*",
+                    "securityhub:Delete*",
+                    "securityhub:*Update*",
+                    "securityhub:*Members*",
+                    "securityhub:Accept*",
+                    "securityhub:DisassociateFromMasterAccount",
+                    "securityhub:*Import*",
+                    "organizations:*"
+                ],
+                "Resource": "*"
+            }
+        ]
+    }
+}
+
+
+
+

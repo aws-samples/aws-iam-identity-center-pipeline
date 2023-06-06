@@ -1,0 +1,8 @@
+{
+    "Name": "AWSAdministrator",
+    "Description": "Admin in AWS.",
+    "SessionDuration": "PT4H",
+    "ManagedPolicies": [
+        "arn:aws:iam::aws:policy/AdministratorAccess"
+    ]
+}
