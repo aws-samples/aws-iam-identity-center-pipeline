@@ -140,7 +140,8 @@ def list_accounts_in_ou(ouid):
 
     account_list = []
     for eachResult in results:
-        account_list.append(eachResult['Id'])
+        if eachResult["Status"] == "ACTIVE":
+            account_list.append(eachResult['Id'])
     return account_list
 
 def lookup_principal_id(principalName, principalType):
