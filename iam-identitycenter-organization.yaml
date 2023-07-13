@@ -18,15 +18,15 @@ Description: 'IAM role to lookup information in AWS Organization'
 Parameters:
   # Name of the project
   nameConvention:
-    Description: 'Name of the project that will be used in different parts of this template'
+    Description: 'Name of the project that will be used in different parts of this template as a preffix'
     Type: String
     Default: 'iam-identitycenter'
   identityCenterAccountId:
-    Description: 'Name of the project that will be used in different parts of this template'
+    Description: 'Account ID of the Identity Center delegated account'
     Type: String
     Default: "214274217571"
   pipelineRegion:
-    Description: 'Name of the project that will be used in different parts of this template'
+    Description: 'Region where the pipeline was deployed in Identity Center delegated account'
     Type: String
     Default: "us-east-2"
 
