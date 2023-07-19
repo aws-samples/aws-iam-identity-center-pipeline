@@ -232,17 +232,9 @@ Resources:
             BuildSpec: |
               version: 0.2
               phases:
-                install:
-                  commands:
-                    - echo "[INFO] [INSTALL] Installing dependencies"
-                    - pip install git-remote-codecommit
-                    - echo "[INFO] [INSTALL] Installing finished"
                 build:
                   commands:
-                    - echo "[INFO] [BUILD] Cloning AWS SSO repository"
-                    - rm -rf $IDENTITYCENTER_REPOSITORY
-                    - git clone codecommit::$REGION://$IDENTITYCENTER_REPOSITORY
-                    - cd $IDENTITYCENTER_REPOSITORY
+                    - echo "[INFO] [BUILD] Starting templates validation"
                     - cd source/validation/
                     - chmod +x iam-identitycenter-validation.py
                     - python3 iam-identitycenter-validation.py --ps-folder '../../templates/permissionsets/' --assignments-folder '../../templates/assignments/'
@@ -378,17 +370,9 @@ Resources:
             BuildSpec: |
               version: 0.2
               phases:
-                install:
-                  commands:
-                    - echo "[INFO] [INSTALL] Installing dependencies"
-                    - pip install git-remote-codecommit
-                    - echo "[INFO] [INSTALL] Installing finished"
                 build:
                   commands:
-                    - echo "[INFO] [BUILD] Cloning AWS Identity Center repository"
-                    - rm -rf $IDENTITYCENTER_REPOSITORY
-                    - git clone codecommit::$REGION://$IDENTITYCENTER_REPOSITORY
-                    - cd $IDENTITYCENTER_REPOSITORY
+                    - echo "[INFO] [BUILD] Starting Permission Sets stage"
                     - cd source/permissionsets
                     - chmod +x iam-identitycenter-permissionset.py
                     - python3 iam-identitycenter-permissionset.py
@@ -558,19 +542,15 @@ Resources:
                 install:
                   commands:
                     - echo "[INFO] [INSTALL] Installing dependencies"
-                    - pip install git-remote-codecommit
-                    - echo "[INFO] [INSTALL] Installing finished"
                     - wget https://releases.hashicorp.com/terraform/1.4.4/terraform_1.4.4_linux_amd64.zip
                     - unzip terraform_1.4.4_linux_amd64.zip -d /usr/bin/
                     - chmod +x /usr/bin/terraform
+                    - echo "[INFO] [INSTALL] Installing finished"                    
                   finally:
                     - terraform --version
                 build:
                   commands:
-                    - echo "[INFO] [BUILD] Cloning AWS Identity Center repository"
-                    - rm -rf $IDENTITYCENTER_REPOSITORY
-                    - git clone codecommit::$REGION://$IDENTITYCENTER_REPOSITORY
-                    - cd $IDENTITYCENTER_REPOSITORY
+                    - echo "[INFO] [BUILD] Starting Assigments stage"
                     - cd source/assignments/
                     - chmod +x iam-identitycenter-assignments.py
                     - python3 iam-identitycenter-assignments.py --org_role $ORG_ROLE --mgmt_account $MGMT_ACCOUNT
