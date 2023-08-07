@@ -18,7 +18,7 @@ Description: 'IAM role to lookup information in AWS Organization'
 Parameters:
   # Name of the project
   nameConvention:
-    Description: 'Name of the project that will be used in different parts of this template as a preffix'
+    Description: 'Name of the project that will be used in different parts of this template as a prefix'
     Type: String
     Default: 'iam-identitycenter'
   identityCenterAccountId:
