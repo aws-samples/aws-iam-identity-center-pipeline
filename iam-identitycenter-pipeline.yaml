@@ -22,7 +22,7 @@ Description: 'Create a CI/CD pipeline for AWS Single Sign On permission sets and
 Parameters:
   # Name of the project
   nameConvention:
-    Description: 'Preffix that will be used to name resources in this stack (e.g. roles, events, pipeline)'
+    Description: 'Prefix that will be used to name resources in this stack (e.g. roles, events, pipeline)'
     Type: String
     Default: iam-identitycenter
     
