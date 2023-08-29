@@ -10,6 +10,6 @@ To manage your AWS IAM Identity Center permissions and assignments as code, this
 
 The code in this repository helps you set up the following target architecture.
 
-![Architecture](pictures/iam-identitycenter.png)
+![Architecture](pictures/aws-iam-identitycenter.png)
 
 For prerequisites and instructions for using this AWS Prescriptive Guidance pattern, see [Manage AWS IAM Identity Center permission sets as code by using AWS CodePipeline](https://docs.aws.amazon.com/prescriptive-guidance/latest/patterns/manage-aws-iam-identity-center-permission-sets-as-code-by-using-aws-codepipeline.html).
