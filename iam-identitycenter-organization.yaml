@@ -15,20 +15,40 @@
 
 AWSTemplateFormatVersion: "2010-09-09"
 Description: 'IAM role to lookup information in AWS Organization'
+
+## +-------
+## | Metadata
+## +--------------
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "General Parameters"
+        Parameters:
+          - nameConvention
+          - identityCenterAccountNameConvention
+          - identityCenterAccountId
+          - pipelineRegion
+
+## +-------
+## | Parameters
+## +--------------
 Parameters:
   # Name of the project
   nameConvention:
-    Description: 'Name of the project that will be used in different parts of this template as a prefix'
+    Description: 'Prefix that will be used to name resources in this stack within the Organization Management Account (e.g. roles, events, lambda)'
     Type: String
-    Default: 'iam-identitycenter'
+    Default: "iam-identitycenter"
+  identityCenterAccountNameConvention:
+    Description: 'Prefix that will be used to name resources within the AWS IAM Identity Center Delegated Admin account (e.g. roles, events, pipeline)'
+    Type: String
+    Default: "iam-identitycenter"
   identityCenterAccountId:
-    Description: 'Account ID of the Identity Center delegated account'
+    Description: 'Account ID of the Identity Center delegated account (e.g. 123456789123)'
     Type: String
-    Default: "214274217571"
   pipelineRegion:
-    Description: 'Region where the pipeline was deployed in Identity Center delegated account'
+    Description: 'Region where the pipeline was deployed within the Identity Center delegated account (e.g. us-east-1)'
     Type: String
-    Default: "us-east-2"
 
 Resources:
 ## +-------
@@ -63,10 +83,12 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              AWS: !Sub 'arn:aws:iam::${identityCenterAccountId}:role/${nameConvention}-assignments-write'
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${identityCenterAccountId}:role/${identityCenterAccountNameConvention}-assignments-write'
             Action:
               - 'sts:AssumeRole'
-
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-org-lookup-read"
 
 ## +-------
 ## | EventBridge (Trigger)
@@ -114,21 +136,23 @@ Resources:
       cfn_nag:
         rules_to_suppress:
           - id: W89
-            reason: "Lambda not required in VPC for this use case"          
+            reason: "Lambda not required in VPC for this use case"
+          - id: W58
+            reason: "Lambda functions require permission to write CloudWatch Logs"        
     Properties:
       FunctionName: !Sub ${nameConvention}-moveou-trigger
       Handler: 'index.lambda_handler'
       Environment:
         Variables:
           PIPELINE_NAME:
-            !Sub '${nameConvention}-pipeline'
+            !Sub '${identityCenterAccountNameConvention}-pipeline'
           IC_ROLE:
-            !Sub 'arn:aws:iam::${identityCenterAccountId}:role/${nameConvention}-pipelinetrigger-write'    
+            !Sub 'arn:${AWS::Partition}:iam::${identityCenterAccountId}:role/${identityCenterAccountNameConvention}-pipelinetrigger-write'    
           PIPELINE_REGION:
             !Sub '${pipelineRegion}'
       MemorySize: 128
       Role: !GetAtt 'LambdaTriggerRole.Arn'
-      Runtime: 'python3.9'
+      Runtime: 'python3.11'
       Timeout: 900
       ReservedConcurrentExecutions: 5
       Code:
@@ -155,6 +179,9 @@ Resources:
                       codepipeline_response = codepipeline_client.start_pipeline_execution(
                           name=codepipeline_name
                           )
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-moveou-trigger"
 
 ## +-------
 ## | IAM Role (Lambda Trigger)
@@ -179,7 +206,7 @@ Resources:
           - 'sts:AssumeRole'
       Path: '/'
       ManagedPolicyArns:
-      - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
       Policies:
       - PolicyName: !Sub ${nameConvention}-moveou
         PolicyDocument:
@@ -190,5 +217,7 @@ Resources:
               Action:
                 - sts:AssumeRole
               Resource:
-                - !Sub 'arn:aws:iam::${identityCenterAccountId}:role/${nameConvention}-pipelinetrigger-write'
-
+                - !Sub 'arn:${AWS::Partition}:iam::${identityCenterAccountId}:role/${identityCenterAccountNameConvention}-pipelinetrigger-write'
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-assumerole-write"
