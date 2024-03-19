@@ -145,7 +145,7 @@ Resources:
       Environment:
         Variables:
           PIPELINE_NAME:
-            !Sub '${nameConvention}-pipeline'
+            !Sub '${identityCenterAccountNameConvention}-pipeline'
           IC_ROLE:
             !Sub 'arn:${AWS::Partition}:iam::${identityCenterAccountId}:role/${identityCenterAccountNameConvention}-pipelinetrigger-write'    
           PIPELINE_REGION:
