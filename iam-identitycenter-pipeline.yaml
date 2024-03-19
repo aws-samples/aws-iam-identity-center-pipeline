@@ -1077,7 +1077,7 @@ Resources:
             install:
               commands:
                 - echo "[INFO] [INSTALL] Installing dependencies"
-                - wget https://releases.hashicorp.com/terraform/1.7.4/terraform_1.7.4_linux_amd64.zip
+                - wget https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
                 - unzip terraform_*_linux_amd64.zip -d /usr/bin/
                 - chmod +x /usr/bin/terraform
                 - echo "[INFO] [INSTALL] Installing finished"                    
