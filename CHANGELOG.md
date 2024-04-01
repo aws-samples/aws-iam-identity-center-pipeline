@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [1.3.0] - 2024-03-28
+### Added
+- Added notification capability for failures in pipeline and CodeCommit status change
+- Added CloudFormation metadata for parameters
+
+### Changed
+- Changed AWS partition hard-coded in ARNs for dynamic "${AWS::Partition}" to support multiple partitions
+- Renamed CloudFormation parameters for cohesion
+- Updated Python runtime in Lambda functions from 3.9 to 3.11
+- Updated CodeBuild image version from amazonlinux2-x86_64-standard:3.0 to amazonlinux2-x86_64-standard:5.0
+- Updated Terraform version from 1.4.4 to 1.7.5
+- Removed unused CodeBuild environment variable IDENTITYCENTER_REPOSITORY
+
+### Fixed
+- Fixed CloudFormation parameter descriptions
+
 ## [1.2.1] - 2023-06-06
 ### Added
 - N/A
