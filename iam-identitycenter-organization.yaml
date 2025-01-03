@@ -52,45 +52,6 @@ Parameters:
 
 Resources:
 ## +-------
-## | IAM Service Role (Assignments)
-## +---------------
-  orgRole:
-    Type: AWS::IAM::Role
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W11
-            reason: "Requires * in Resource to interact with all Identity Center resources"    
-          - id: W28
-            reason: "Fixed name required to future references"         
-    Properties:
-      RoleName: !Sub ${nameConvention}-org-lookup-read
-      Description: 'Service role for CodeBuild'
-      Policies:
-        - PolicyName: !Sub ${nameConvention}-read
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Sid: CodeComitPermissions
-                Effect: Allow
-                Action:
-                  - organizations:List*
-                  - organizations:Describe*
-                Resource:
-                  - "*"                
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              AWS: !Sub 'arn:${AWS::Partition}:iam::${identityCenterAccountId}:role/${identityCenterAccountNameConvention}-assignments-write'
-            Action:
-              - 'sts:AssumeRole'
-      Tags: 
-        - Key: "Name"
-          Value: !Sub "${nameConvention}-org-lookup-read"
-
-## +-------
 ## | EventBridge (Trigger)
 ## +---------------
   triggerPipelineAccountMove:
