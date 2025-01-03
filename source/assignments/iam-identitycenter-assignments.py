@@ -43,7 +43,6 @@ config = Config(
 
 # Setting arguments
 parser = argparse.ArgumentParser(description='AWS SSO Permission Set Management')
-parser.add_argument('--org_role', action="store", dest='orgRole')
 parser.add_argument('--mgmt_account', action="store", dest='mgmtAccount')
 
 args = parser.parse_args()
@@ -153,7 +152,7 @@ def list_accounts_in_ou_nested(ou_id):
     return list_all_accounts_recursive(ou_id)
 
 def list_accounts_in_ou(ouid):
-    client = boto3.client('organizations', config=config, aws_access_key_id=credentials['AccessKeyId'], aws_secret_access_key=credentials['SecretAccessKey'], aws_session_token=credentials['SessionToken'])
+    client = boto3.client('organizations', config=config)
     root_id = client.list_roots()['Roots'][0]['Id']
     
     try:
@@ -256,17 +255,10 @@ def main():
     global identitystore
     global resolvedAssingmnets
     global managementAccount
-    global credentials
     resolvedAssingmnets = {}
     resolvedAssingmnets['Assignments'] = []
 
     managementAccount = args.mgmtAccount
-
-    # Assume role in management account
-    mgmt_role = args.orgRole
-    sts_client = boto3.client('sts', config=config)
-    assumed_role_object=sts_client.assume_role(RoleArn=mgmt_role,RoleSessionName="identitycenter-pipeline")
-    credentials=assumed_role_object['Credentials']
 
     # Get Identity Store and SSO Instance ARN
     sso_client = boto3.client('sso-admin', config=config)

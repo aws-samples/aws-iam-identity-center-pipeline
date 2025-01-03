@@ -15,6 +15,7 @@ Previous versions of the pipeline assign permissions in Organization Units (OUs)
 ### Changed
 - AWS CodeCommit is no longer available to new customers. Existing customers of AWS CodeCommit can continue to use the service as normal. The pipeline now supports using alternative source repository (e.g. GitHub). Support for AWS CodeCommit was removed. Resources related to CodeCommit were also removed.
 - AWS CodePipeline stages were optimized. In previous versions we had one stage for each deployment phase (i.e., Permission Set stage and Assignments Stage). We now have a single stage called Deploy with two action groups (PermissionSet and Assignment).
+- AWS Organization launched delegated administrator for AWS Organizations to help you delegate the management of your Organizations. Because of that, the IAM role being used to query AWS Organizatons in the management account is no longer required. You now have to delegate AWS Organization to the pipeline account before implementing it.
 
 ### Fixed
 - Previous versions of the pipeline assign permissions in Organization Units (OUs) by using its name. However, AWS Organization allows multiple OUs with the same name. To address that, I have changed how you specify Targets in the assignment template file. Now you need to specify using the format {{ou_name}}:{{ou_id}} or {{account_name}}:{{acount_id}} to ensure you are assigning permission in the correct OU. Using “Root” as a target to assign permission in all AWS accounts is still valid.

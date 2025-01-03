@@ -26,7 +26,6 @@ Metadata:
           default: "General Parameters"
         Parameters:
           - nameConvention
-          - mgmtAccountNameConvention
           - s3NameConvention
           - mgmtAccountId
       - Label:
@@ -47,10 +46,6 @@ Parameters:
     Description: "Prefix that will be used to name resources in this stack within the AWS IAM Identity Center Delegated Admin account (e.g. roles, events, pipeline)"
     Type: String
     Default: "iam-identitycenter"
-  mgmtAccountNameConvention:
-    Description: "Prefix that will be used to name resources within the Organization Management Account (e.g. roles, events, lambda)"
-    Type: String
-    Default: "iam-identitycenter"
   s3NameConvention:
     Description: "Prefix that will be used to name S3 buckets.  Recommended to mirror nameConvention, but MUST use all lowercase"
     Type: String
@@ -69,7 +64,7 @@ Parameters:
   fullRepositoryId:
     Description: "Full repository ID in the format user/repository_name"
     Type: String
-    Default: andrecvnt/iam-idc-pipeline
+    Default: user/iam-idc-pipeline
   codeBuildErrorEmailAddress:
     Description: "Optional: If you wish to receive a notification upon a CodeBuild error, enter an email address and accept the topic subscription. (e.g. user@emaildomain.com)"
     Type: String
@@ -844,8 +839,6 @@ Resources:
         EnvironmentVariables:
           - Name: REGION
             Value: !Sub ${AWS::Region}
-          - Name: ORG_ROLE
-            Value: !Sub "arn:${AWS::Partition}:iam::${mgmtAccountId}:role/${mgmtAccountNameConvention}-org-lookup-read"
           - Name: TERRAFORM_STATE
             Value: !Ref tfStateBucket
           - Name: MGMT_ACCOUNT
@@ -978,12 +971,6 @@ Resources:
                   - "kms:DescribeKey"
                 Resource:
                   - !GetAtt KmsKeyS3.Arn
-              - Sid: AssumeRoleOrg
-                Effect: Allow
-                Action:
-                  - "sts:AssumeRole"
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:iam::${mgmtAccountId}:role/${mgmtAccountNameConvention}-org-lookup-read"
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
