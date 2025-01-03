@@ -83,12 +83,16 @@ def get_repository_permissionset_list():
 # This will update general information of permission set, like description and session duration
 def update_general_information(permissionSet, permissionSetArn, client):
     log.info(f"[PS: {permissionSet['Name']}] " + "Updating General Information...")
+
+    relay_state = permissionSet.get('RelayState', "https://console.aws.amazon.com/")
+    
     try:
         response = client.update_permission_set(
             InstanceArn=ssoInstanceArn,
             PermissionSetArn=permissionSetArn,
             Description=permissionSet['Description'],
-            SessionDuration=permissionSet['SessionDuration']
+            SessionDuration=permissionSet['SessionDuration'],
+            RelayState=relay_state
         )
         log.info(f"[PS: {permissionSet['Name']}] " + "Successfully upated general information")
     except Exception as e:

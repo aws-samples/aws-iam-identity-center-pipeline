@@ -30,11 +30,6 @@ Metadata:
           - s3NameConvention
           - mgmtAccountId
       - Label:
-          default: "AWS IIC Pipeline Initialization Data"
-        Parameters:
-          - s3BucketCodeBucket
-          - s3BucketCodeKey
-      - Label:
           default: "CloudWatch Logs"
         Parameters:
           - cwLGRetentionInDays
@@ -42,7 +37,6 @@ Metadata:
           default: "SNS Notifications"
         Parameters:
           - codeBuildErrorEmailAddress
-          - codeCommitEmailAddress
 
 ## +-------
 ## | Parameters
@@ -64,24 +58,23 @@ Parameters:
   mgmtAccountId:
     Description: "Account ID of the management account. (e.g. 123456789123)"
     Type: String
-  s3BucketCodeBucket:
-    Description: "S3 bucket with the initial repository code. Must be created in advance."
-    Type: String
-    Default: "iam-identitycenter-initialcode"
-  s3BucketCodeKey:
-    Description: "Name of the zip file with the repository initial code hosted in S3 bucket above"
-    Type: String
-    Default: "iam-identitycenter.zip"
   cwLGRetentionInDays:
     Description: "Specify the retention time in days for logs within CloudWatch Log Groups"
     Type: String
     Default: 365
+  providerType:
+    Description: "Repository provider type. Ex: GitHub"
+    Type: String
+    Default: "GitHub"
+  fullRepositoryId:
+    Description: "Full repository ID in the format user/repository_name"
+    Type: String
+    Default: andrecvnt/iam-idc-pipeline
   codeBuildErrorEmailAddress:
     Description: "Optional: If you wish to receive a notification upon a CodeBuild error, enter an email address and accept the topic subscription. (e.g. user@emaildomain.com)"
     Type: String
-  codeCommitEmailAddress:
-    Description: "Optional: If you wish to receive a notification upon CodeCommit State Changes and Pull Requests, enter an email address and accept the topic subscription. (e.g. user@emaildomain.com)"
-    Type: String
+
+
 
 ## +-------
 ## | Conditions
@@ -92,11 +85,6 @@ Conditions:
       - Fn::Equals:
           - ""
           - Ref: codeBuildErrorEmailAddress
-  codecommitEmailProvided:
-    Fn::Not:
-      - Fn::Equals:
-          - ""
-          - Ref: codeCommitEmailAddress
 
 Resources:
   ## +-------
@@ -141,44 +129,7 @@ Resources:
       Topics:
         - !Ref CodeBuildSNSTopic
 
-  CodeCommitSNSTopic:
-    Type: AWS::SNS::Topic
-    Condition: codecommitEmailProvided
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W47
-            reason: "SNS Topic should specify KmsMasterKeyId property"
-    Properties:
-      TopicName: !Sub "${nameConvention}-CodeCommitSNSTopic"
 
-  CodeCommitSNSSubscription:
-    Condition: codecommitEmailProvided
-    Type: AWS::SNS::Subscription
-    Properties:
-      Protocol: email
-      Endpoint: !Ref codeCommitEmailAddress
-      TopicArn: !Ref CodeCommitSNSTopic
-
-  CodeCommitSNSTopicPolicy:
-    Condition: codecommitEmailProvided
-    Type: AWS::SNS::TopicPolicy
-    Properties:
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: events.amazonaws.com
-            Action:
-              - sns:Publish
-            Resource:
-              Ref: CodeCommitSNSTopic
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Sub "${AWS::AccountId}"
-      Topics:
-        - !Ref CodeCommitSNSTopic
 
   ## +-------
   ## | CloudWatch Log Groups (Lambda and CodeBuild)
@@ -239,20 +190,6 @@ Resources:
       Tags: 
         - Key: "Name"
           Value: !Sub "${nameConvention}-PipelineToSNSLambda"
-
-  PipelineLogGroupCodeCommitTrigger:
-    Type: AWS::Logs::LogGroup
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W84 
-            reason: "CloudWatchLogs LogGroup should specify a KMS Key Id to encrypt the log data"
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${nameConvention}-codecommit-trigger"
-      RetentionInDays: !Ref cwLGRetentionInDays
-      Tags: 
-        - Key: "Name"
-          Value: !Sub "${nameConvention}-codecommit-trigger"
 
   ## +-------
   ## | IAM Role (Pipeline Failure Notification)
@@ -468,109 +405,10 @@ Resources:
       LogGroupName: !Ref PipelineLogGroupPermissionSet
 
   ## +-------
-  ## | EventBridge Notifications for CodeCommit
-  ## +---------------
-  CodeCommitStateChangeEventRule:
-    Condition: codecommitEmailProvided
-    Type: "AWS::Events::Rule"
-    Properties:
-      Description: CodeCommit State Change Events
-      Name: !Sub "${nameConvention}-CCChangeNotify"
-      EventPattern:
-        source:
-          - aws.codecommit
-        detail-type:
-          - CodeCommit Repository State Change
-        resources:
-          - !GetAtt IdentityCenterRepository.Arn
-      State: ENABLED
-      Targets:
-        - Arn: !Ref CodeCommitSNSTopic
-          Id: CodeCommitSNSTopic
-          InputTransformer:
-            InputPathsMap:
-              "source": "$.source"
-              "event": "$.detail.event"
-              "time": "$.time"
-              "resource_arn": "$.resources"
-              "resource_repositoryname": "$.detail.repositoryName"
-              "resource_type": "$.detail.referenceType"
-              "resource_branchName": "$.detail.referenceName"
-              "callerUserArn": "$.detail.callerUserArn"
-            InputTemplate: |
-              "CodeCommit had a repository state change"
-              "Event Source: <source>"
-              "Event Name: <event>"
-              "Event Time: <time>"
-              "Repository Name: <resource_repositoryname>"
-              "Repository ARN: <resource_arn>"
-              "Repository Type: <resource_type>"
-              "Repository Branch: <resource_branchName>"
-              "User Identity: <callerUserArn>"
-          RetryPolicy:
-            MaximumRetryAttempts: 4
-            MaximumEventAgeInSeconds: 400
-
-  CodeCommitPullRequestStateChangeEventRule:
-    Condition: codecommitEmailProvided
-    Type: "AWS::Events::Rule"
-    Properties:
-      Description: CodeCommit Pull Request Change Events
-      Name: !Sub "${nameConvention}-CCPullReqNotify"
-      EventPattern:
-        source:
-          - aws.codecommit
-        detail-type:
-          - CodeCommit Pull Request State Change
-        resources:
-          - !GetAtt IdentityCenterRepository.Arn
-      State: ENABLED
-      Targets:
-        - Arn: !Ref CodeCommitSNSTopic
-          Id: CodeCommitSNSTopic
-          InputTransformer:
-            InputPathsMap:
-              "source": "$.source"
-              "time": "$.time"
-              "approvalStatus": "$.detail.approvalStatus"
-              "author": "$.detail.author"
-              "callerUserArn": "$.detail.callerUserArn"
-              "description": "$.detail.description"
-              "destinationReference": "$.detail.destinationReference"
-              "event": "$.detail.event"
-              "isMerged": "$.detail.isMerged"
-              "notificationBody": "$.detail.notificationBody"
-              "pullRequestStatus": "$.detail.pullRequestStatus"
-              "repositoryNames": "$.detail.repositoryNames"
-              "sourceReference": "$.detail.sourceReference"
-              "title": "$.detail.title"
-            InputTemplate: |
-              "CodeCommit had a Pull Request State Change"
-              "Event Source: <source>"
-              "Event Name: <event>"
-              "Event Time: <time>"
-              "Title: <title>"
-              "Approval Status: <approvalStatus>"
-              "Author: <author>"
-              "PR Modification User: <callerUserArn>"
-              "Description: <description>"
-              "Repository Name: <repositoryNames>"
-              "Source Reference: <sourceReference>"
-              "Destination Reference: <destinationReference>"
-              "PR is Merged: <isMerged>"
-              "notificationBody: <notificationBody>"
-              "Pull Request Status: <pullRequestStatus>"
-          RetryPolicy:
-            MaximumRetryAttempts: 4
-            MaximumEventAgeInSeconds: 400
-
-  ## +-------
   ## | CodePipeline
   ## +---------------
   Pipeline:
     Type: AWS::CodePipeline::Pipeline
-    DependsOn:
-      - triggerPipelineLambda
     Properties:
       RoleArn: !GetAtt PipelineRole.Arn
       Name: !Sub "${nameConvention}-pipeline"
@@ -585,13 +423,14 @@ Resources:
                 Category: Source
                 Owner: AWS
                 Version: "1"
-                Provider: CodeCommit
+                Provider: CodeStarSourceConnection
               Configuration:
-                RepositoryName: !GetAtt IdentityCenterRepository.Name
+                FullRepositoryId: !Ref fullRepositoryId
                 BranchName: main
-                PollForSourceChanges: false
+                ConnectionArn: !GetAtt IdentityCenterConnection.ConnectionArn
+                OutputArtifactFormat: CODE_ZIP
               OutputArtifacts:
-                - Name: CodeCommitOutput
+                - Name: RepositoryOutput
               RunOrder: 1
         - Name: TemplateValidation
           Actions:
@@ -605,12 +444,13 @@ Resources:
                 ProjectName: !Ref CodebuildTemplateValidation
               RunOrder: 1
               InputArtifacts:
-                - Name: CodeCommitOutput
+                - Name: RepositoryOutput
               OutputArtifacts:
                 - Name: TemplateValidation
-        - Name: PermissionSet
+        - Name: Deploy
           Actions:
             - Name: PermissionSet
+              RunOrder: 1
               ActionTypeId:
                 Category: Build
                 Owner: AWS
@@ -618,14 +458,12 @@ Resources:
                 Provider: CodeBuild
               Configuration:
                 ProjectName: !Ref CodebuildPermissionSet
-              RunOrder: 1
               InputArtifacts:
-                - Name: CodeCommitOutput
+                - Name: RepositoryOutput
               OutputArtifacts:
                 - Name: PermissionSetOutput
-        - Name: Assignments
-          Actions:
             - Name: Assignments
+              RunOrder: 2
               ActionTypeId:
                 Category: Build
                 Owner: AWS
@@ -633,9 +471,8 @@ Resources:
                 Provider: CodeBuild
               Configuration:
                 ProjectName: !Ref CodebuildAssignments
-              RunOrder: 1
               InputArtifacts:
-                - Name: CodeCommitOutput
+                - Name: RepositoryOutput
               OutputArtifacts:
                 - Name: AssignmentsOutput
       Tags: 
@@ -671,19 +508,6 @@ Resources:
         - PolicyName: !Sub ${nameConvention}-codepipeline-write
           PolicyDocument:
             Statement:
-              - Sid: CodeComitPermissions
-                Effect: Allow
-                Action:
-                  - codecommit:ListBranches
-                  - codecommit:ListRepositories
-                  - codecommit:GetCommit
-                  - codecommit:GetBranch
-                  - codecommit:GetUploadArchiveStatus
-                  - codecommit:GitPull
-                  - codecommit:UploadArchive
-                  - codecommit:CancelUploadArchive
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
               - Sid: CodeBuildAccess
                 Effect: Allow
                 Action:
@@ -708,8 +532,13 @@ Resources:
                 Resource:
                   - !Sub "arn:${AWS::Partition}:s3:::${artifactsBucket}/*"
                   - !Sub "arn:${AWS::Partition}:s3:::${artifactsBucket}*"
-                  - !Sub "arn:${AWS::Partition}:s3:::${s3BucketCodeBucket}/*"
-                  - !Sub "arn:${AWS::Partition}:s3:::${s3BucketCodeBucket}*"
+              - Sid: CodeConnection
+                Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                Resource:
+                  - !GetAtt  IdentityCenterConnection.ConnectionArn
+
       Tags: 
         - Key: "Name"
           Value: !Sub "${nameConvention}-codepipeline-write"
@@ -717,19 +546,13 @@ Resources:
   ## +-------
   ## | Repository (Identity Center Management)
   ## +--------------
-  IdentityCenterRepository:
-    Type: AWS::CodeCommit::Repository
+
+  IdentityCenterConnection:
+    Type: AWS::CodeConnections::Connection
     Properties:
-      RepositoryDescription: "Repository to control AWS Identity Center Permission Sets and assignments"
-      RepositoryName: !Sub "${nameConvention}-repository"
-      Code:
-        BranchName: "main"
-        S3:
-          Bucket: !Ref s3BucketCodeBucket
-          Key: !Ref "s3BucketCodeKey"
-      Tags: 
-        - Key: "Name"
-          Value: !Sub "${nameConvention}-repository"
+      ConnectionName: !Sub "${nameConvention}-repository"
+      ProviderType: !Ref providerType
+  
 
   ## +-------
   ## | CodeBuild Project (Template Validation)
@@ -747,7 +570,7 @@ Resources:
       EncryptionKey: !GetAtt KmsKeyS3.Arn
       Environment:
         ComputeType: BUILD_GENERAL1_SMALL
-        Image: "aws/codebuild/amazonlinux2-x86_64-standard:5.0"
+        Image: "aws/codebuild/amazonlinux-x86_64-standard:5.0"
         Type: LINUX_CONTAINER
         EnvironmentVariables:
           - Name: REGION
@@ -790,19 +613,6 @@ Resources:
           PolicyDocument:
             Version: 2012-10-17
             Statement:
-              - Sid: CodeCommitPermissions
-                Effect: Allow
-                Action:
-                  - codecommit:ListBranches
-                  - codecommit:ListRepositories
-                  - codecommit:GetCommit
-                  - codecommit:GetBranch
-                  - codecommit:GetUploadArchiveStatus
-                  - codecommit:GitPull
-                  - codecommit:UploadArchive
-                  - codecommit:CancelUploadArchive
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
               - Sid: CodeBuildAccess
                 Effect: Allow
                 Action:
@@ -828,12 +638,6 @@ Resources:
                   - "s3:GetBucketLocation"
                 Resource:
                   - !Sub "arn:${AWS::Partition}:s3:::${artifactsBucket}*/*"
-              - Sid: CodeRepos
-                Effect: Allow
-                Resource:
-                  - !GetAtt IdentityCenterRepository.Arn
-                Action:
-                  - "codecommit:GitPull"
               - Sid: CodeBuild
                 Effect: Allow
                 Action:
@@ -932,19 +736,6 @@ Resources:
           PolicyDocument:
             Version: 2012-10-17
             Statement:
-              - Sid: CodeComitPermissions
-                Effect: Allow
-                Action:
-                  - codecommit:ListBranches
-                  - codecommit:ListRepositories
-                  - codecommit:GetCommit
-                  - codecommit:GetBranch
-                  - codecommit:GetUploadArchiveStatus
-                  - codecommit:GitPull
-                  - codecommit:UploadArchive
-                  - codecommit:CancelUploadArchive
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
               - Sid: CodeBuildAccess
                 Effect: Allow
                 Action:
@@ -970,12 +761,6 @@ Resources:
                   - "s3:GetBucketLocation"
                 Resource:
                   - !Sub "arn:${AWS::Partition}:s3:::${artifactsBucket}*/*"
-              - Sid: CodeRepos
-                Effect: Allow
-                Resource:
-                  - !GetAtt IdentityCenterRepository.Arn
-                Action:
-                  - "codecommit:GitPull"
               - Sid: CodeBuild
                 Effect: Allow
                 Action:
@@ -1116,19 +901,6 @@ Resources:
           PolicyDocument:
             Version: 2012-10-17
             Statement:
-              - Sid: CodeComitPermissions
-                Effect: Allow
-                Action:
-                  - codecommit:ListBranches
-                  - codecommit:ListRepositories
-                  - codecommit:GetCommit
-                  - codecommit:GetBranch
-                  - codecommit:GetUploadArchiveStatus
-                  - codecommit:GitPull
-                  - codecommit:UploadArchive
-                  - codecommit:CancelUploadArchive
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
               - Sid: CodeBuildAccess
                 Effect: Allow
                 Action:
@@ -1158,12 +930,6 @@ Resources:
                 Resource:
                   - !Sub "arn:${AWS::Partition}:s3:::${artifactsBucket}*/*"
                   - !Sub "arn:${AWS::Partition}:s3:::${tfStateBucket}*/*"
-              - Sid: CodeRepos
-                Effect: Allow
-                Resource:
-                  - !GetAtt IdentityCenterRepository.Arn
-                Action:
-                  - "codecommit:GitPull"
               - Sid: CodeBuild
                 Effect: Allow
                 Action:
@@ -1230,208 +996,6 @@ Resources:
         - Key: "Name"
           Value: !Sub "${nameConvention}-assignments-write"
 
-  ## +-------
-  ## | EventBridge (Trigger)
-  ## +---------------
-  triggerPipelineCodeChange:
-    Type: AWS::Events::Rule
-    Properties:
-      Name: !Sub ${nameConvention}-codechange-trigger
-      Description: "Rule to trigger the CodePipeline based on code changes"
-      EventPattern:
-        source:
-          - "aws.codecommit"
-        detail-type:
-          - "CodeCommit Repository State Change"
-        resources:
-          - !GetAtt IdentityCenterRepository.Arn
-        detail:
-          referenceType:
-            - branch
-          referenceName:
-            - main
-      Targets:
-        - Arn: !GetAtt triggerPipelineLambda.Arn
-          Id: "LambdaTrigger"
-
-  ## +-------
-  ## | EventBridge (Trigger)
-  ## +---------------
-  triggerPipelineAccountMove:
-    Type: AWS::Events::Rule
-    Properties:
-      Name: !Sub ${nameConvention}-moveaccount-trigger
-      Description: "Rule to trigger the CodePipeline based on AWS account OU movement."
-      EventPattern:
-        source:
-          - "aws.organizations"
-        detail-type:
-          - "AWS API Call via CloudTrail"
-        detail:
-          eventSource:
-            - organizations.amazonaws.com
-          eventName:
-            - MoveAccount
-      Targets:
-        - Arn: !GetAtt triggerPipelineLambda.Arn
-          Id: "LambdaTrigger"
-
-  ## +-------
-  ## | Lambda Permission (Trigger)
-  ## +---------------
-  PermissionForEventsToInvokeLambdaCodeChange:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref "triggerPipelineLambda"
-      Action: "lambda:InvokeFunction"
-      Principal: "events.amazonaws.com"
-      SourceArn:
-        Fn::GetAtt:
-          - "triggerPipelineAccountMove"
-          - "Arn"
-
-  ## +-------
-  ## | Lambda Permission (Trigger)
-  ## +---------------
-  PermissionForEventsToInvokeLambdaMoveAccount:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref "triggerPipelineLambda"
-      Action: "lambda:InvokeFunction"
-      Principal: "events.amazonaws.com"
-      SourceArn:
-        Fn::GetAtt:
-          - "triggerPipelineCodeChange"
-          - "Arn"
-
-  ## +-------
-  ## | Lambda (Trigger)
-  ## +---------------
-  triggerPipelineLambda:
-    Type: "AWS::Lambda::Function"
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W89
-            reason: "Lambda not required in VPC for this use case"
-          - id: W58
-            reason: "Lambda functions require permission to write CloudWatch Logs"
-    Properties:
-      FunctionName: !Sub ${nameConvention}-codecommit-trigger
-      Handler: "index.lambda_handler"
-      Environment:
-        Variables:
-          PIPELINE_NAME: !Sub "${nameConvention}-pipeline"
-      MemorySize: 128
-      Role: !GetAtt "LambdaTriggerRole.Arn"
-      Runtime: "python3.11"
-      Timeout: 900
-      ReservedConcurrentExecutions: 5
-      Code:
-        ZipFile: |
-          import boto3
-          import os
-
-          codepipeline_name = os.environ['PIPELINE_NAME']
-          files_to_ignore = ["readme.md","iam-ssopipeline.yaml","license","changelog.md","iam-identitycenter.drawio","iam-identitycenter.png"]
-
-          codecommit_client = boto3.client('codecommit')
-          codepipeline_client = boto3.client('codepipeline')
-
-          def lambda_handler(event, context):
-              if event['source'] == 'aws.codecommit':
-                  # Extract commits
-                  old_commit_id = event["detail"]["oldCommitId"]
-                  new_commit_id = event["detail"]["commitId"]
-                  repoName = event["detail"]["repositoryName"]
-
-                  # Get commit differences
-                  codecommit_response = codecommit_client.get_differences(
-                      repositoryName=repoName,
-                      beforeCommitSpecifier=str(old_commit_id),
-                      afterCommitSpecifier=str(new_commit_id)
-                  )
-
-                  # Search commit differences for files to ignore
-                  for difference in codecommit_response["differences"]:
-                      if difference['changeType'] != 'D':
-                          file_path = difference["afterBlob"]["path"].lower()
-                          file_name = file_path.split('/')[-1]
-                          # If non-ignored file is present, kickoff pipeline
-                          if file_name not in files_to_ignore:
-                              print('[INFO] A change in relevant files was made. Starting the pipeline')
-                              codepipeline_response = codepipeline_client.start_pipeline_execution(
-                                  name=codepipeline_name
-                                  )
-                              # Break to avoid executing the pipeline twice
-                              break
-                          print('[INFO] Files that were changed does not trigger the pipeline')
-                      else:
-                          file_path = difference["beforeBlob"]["path"].lower()
-                          file_name = file_path.split('/')[-1]
-                          # If non-ignored file is present, kickoff pipeline
-                          if file_name not in files_to_ignore:
-                              print('[INFO] A change in relevant files was made. Starting the pipeline')
-                              codepipeline_response = codepipeline_client.start_pipeline_execution(
-                                  name=codepipeline_name
-                                  )
-                              # Break to avoid executing the pipeline twice
-                              break
-                          print('[INFO] Files that were changed does not trigger the pipeline')
-      Tags: 
-        - Key: "Name"
-          Value: !Sub "${nameConvention}-codecommit-trigger"
-
-  ## +-------
-  ## | IAM Role (Lambda Trigger)
-  ## +---------------
-  LambdaTriggerRole:
-    Type: "AWS::IAM::Role"
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W28
-            reason: "Fixed name required to future references"
-    Properties:
-      RoleName: !Sub ${nameConvention}-pipelinetrigger-write
-      Description: "Role that the Lambda will use to trigger pipeline"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: "lambda.amazonaws.com"
-            Action:
-              - "sts:AssumeRole"
-          - Effect: Allow
-            Principal:
-              AWS: !Sub ${mgmtAccountId}
-            Action:
-              - "sts:AssumeRole"
-      Path: "/"
-      ManagedPolicyArns:
-        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-      Policies:
-        - PolicyName: !Sub ${nameConvention}-pipelinetrigger
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Sid: CodeComitPerm
-                Effect: Allow
-                Action:
-                  - codecommit:List*
-                  - codecommit:Get*
-                Resource:
-                  - !GetAtt IdentityCenterRepository.Arn
-              - Sid: CodePipelinePerm
-                Effect: Allow
-                Action:
-                  - codepipeline:StartPipelineExecution
-                Resource:
-                  - !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${nameConvention}-pipeline
-      Tags: 
-        - Key: "Name"
-          Value: !Sub "${nameConvention}-pipelinetrigger-write"
 
   ## +-------
   ## | S3 Bucket Artifact
@@ -1557,7 +1121,7 @@ Resources:
     Properties:
       Description: KMS Key for S3
       Enabled: True
-      EnableKeyRotation: true
+      EnableKeyRotation: false
       KeyUsage: ENCRYPT_DECRYPT
       KeyPolicy:
         Version: "2012-10-17"
@@ -1612,3 +1176,37 @@ Resources:
       Tags: 
         - Key: "Name"
           Value: !Sub "${nameConvention}-s3"
+
+  LambdaTriggerRole:
+    Type: "AWS::IAM::Role"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "Fixed name required to future references"
+    Properties:
+      RoleName: !Sub ${nameConvention}-pipelinetrigger-write
+      Description: "Role that the Lambda will use to trigger pipeline"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub ${mgmtAccountId}
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: !Sub ${nameConvention}-pipelinetrigger
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: CodePipelinePerm
+                Effect: Allow
+                Action:
+                  - codepipeline:StartPipelineExecution
+                Resource:
+                  - !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${nameConvention}-pipeline
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-pipelinetrigger-write"          
