@@ -45,14 +45,15 @@ Parameters:
   nameConvention:
     Description: "Prefix that will be used to name resources in this stack within the AWS IAM Identity Center Delegated Admin account (e.g. roles, events, pipeline)"
     Type: String
-    Default: "iam-identitycenter"
+    Default: "iam-idc"
   s3NameConvention:
     Description: "Prefix that will be used to name S3 buckets.  Recommended to mirror nameConvention, but MUST use all lowercase"
     Type: String
-    Default: "iam-identitycenter"
+    Default: "iam-idc"
   mgmtAccountId:
     Description: "Account ID of the management account. (e.g. 123456789123)"
     Type: String
+    Default: ""
   cwLGRetentionInDays:
     Description: "Specify the retention time in days for logs within CloudWatch Log Groups"
     Type: String
@@ -64,10 +65,11 @@ Parameters:
   fullRepositoryId:
     Description: "Full repository ID in the format user/repository_name"
     Type: String
-    Default: user/iam-idc-pipeline
+    Default: user/iam-idc-repository 
   codeBuildErrorEmailAddress:
     Description: "Optional: If you wish to receive a notification upon a CodeBuild error, enter an email address and accept the topic subscription. (e.g. user@emaildomain.com)"
     Type: String
+    Default: user@example.com
 
 
 
@@ -866,7 +868,7 @@ Resources:
                 - echo "[INFO] [BUILD] Starting Assignments stage"
                 - cd source/assignments/
                 - chmod +x iam-identitycenter-assignments.py
-                - python3 iam-identitycenter-assignments.py --org_role $ORG_ROLE --mgmt_account $MGMT_ACCOUNT
+                - python3 iam-identitycenter-assignments.py --mgmt_account $MGMT_ACCOUNT
                 - terraform init -backend-config="bucket=$TERRAFORM_STATE" -backend-config="key=assignments.tfstate" -backend-config="region=$REGION" 
                 - terraform plan
                 - terraform apply -auto-approve

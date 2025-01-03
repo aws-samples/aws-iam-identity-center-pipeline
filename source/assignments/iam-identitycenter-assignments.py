@@ -163,7 +163,7 @@ def list_accounts_in_ou(ouid):
                 account_list = list_accounts_in_ou_nested(str(ouid.split(":")[0]))
             else:
                 account_list = list_active_accounts_in_ou_not_nested(ouid)
-        elif root_id in ouid or 'Root' in ouid:
+        elif root_id in ouid or 'ROOT' in ouid.upper():
             account_list = list_all_accounts()      
         else:
             log.error('Target is not in valid format.')
@@ -172,6 +172,7 @@ def list_accounts_in_ou(ouid):
     except Exception as error:
         log.error('It was not possible to list accounts from Organization Unit. Reason: ' + str(error))
         log.error(traceback.format_exc())
+        exit (1)
     return account_list
 
 def lookup_principal_id(principalName, principalType):
