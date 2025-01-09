@@ -14,7 +14,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## + -----------------------
-## | AWS SSO Permission Set Managemnet
+## | AWS SSO Permission Set Management
 ## +-----------------------------------
 
 import boto3
@@ -63,7 +63,7 @@ def get_current_permissionset_list():
     
     return perm_set_dict
 
-# This method will return all permission sets in the folder specificied in the script argument (--ps-folder) in a single dictionary
+# This method will return all permission sets in the folder specified in the script argument (--ps-folder) in a single dictionary
 def get_repository_permissionset_list():
     psFiles = os.listdir('../../templates/permissionsets/')
     perm_set_dict = {}
@@ -94,7 +94,7 @@ def update_general_information(permissionSet, permissionSetArn, client):
             SessionDuration=permissionSet['SessionDuration'],
             RelayState=relay_state
         )
-        log.info(f"[PS: {permissionSet['Name']}] " + "Successfully upated general information")
+        log.info(f"[PS: {permissionSet['Name']}] " + "Successfully updated general information")
     except Exception as e:
         log.error('It was not possible to update Permission Set general information. Reason: ' + str(e))
         exit(1)
@@ -114,7 +114,7 @@ def update_inline_policy(permissionSet, permissionSetArn, client):
                 PermissionSetArn=permissionSetArn,
                 InlinePolicy=json.dumps(permissionSet['CustomPolicy'])
             )
-            log.info(f"[PS: {permissionSet['Name']}] " + "Successfully upated inline permissions")
+            log.info(f"[PS: {permissionSet['Name']}] " + "Successfully updated inline permissions")
         except Exception as e:
             log.error('It was not possible to update inline permission. Reason: ' + str(e))
             exit(1)
@@ -137,7 +137,7 @@ def update_inline_policy(permissionSet, permissionSetArn, client):
 ## AWS MANAGED POLICIES ##
 ##########################
 def update_aws_managed_policies(permissionSet, permissionSetArn, client):
-    log.info(f"[PS: {permissionSet['Name']}] " + "Updateing on AWS Managed Policies...")
+    log.info(f"[PS: {permissionSet['Name']}] " + "Updating on AWS Managed Policies...")
     
     # List AWS Managed Policies
     response = client.list_managed_policies_in_permission_set(
