@@ -4,25 +4,25 @@ import json
 
 
 """
-Este script lista os IDs das Organizational Units (OUs) aninhadas no AWS Organizations. Ele realiza as seguintes operações:
+This script lists the IDs of nested Organizational Units (OUs) in AWS Organizations. It performs the following operations:
 
-1. Importação de bibliotecas: Importa as bibliotecas `boto3`, `argparse` e `json`.
+1. Importing libraries: Imports the `boto3`, `argparse`, and `json` libraries.
 
-2. Inicialização do cliente AWS Organizations: Inicializa o cliente boto3 para interagir com o serviço AWS Organizations.
+2. Initializing the AWS Organizations client: Initializes the boto3 client to interact with the AWS Organizations service.
 
-3. Funções auxiliares:
-    - `list_nested_ou_ids(parent_ou_id)`: Lista os IDs das OUs aninhadas a partir de um OU pai fornecido. Utiliza um paginador 
-    para percorrer todas as OUs aninhadas e adiciona seus IDs a uma lista.
+3. Helper functions:
+    - `list_nested_ou_ids(parent_ou_id)`: Lists the IDs of nested OUs starting from a given parent OU. Uses a paginator 
+    to iterate through all nested OUs and adds their IDs to a list.
 
-4. Função principal:
-    - `main()`: Recebe o ID da OU pai como parâmetro, chama a função `list_nested_ou_ids` para obter os IDs das OUs aninhadas 
-    e imprime a lista resultante em formato JSON com indentação.
+4. Main function:
+    - `main()`: Receives the parent OU ID as a parameter, calls the `list_nested_ou_ids` function to get the IDs of nested OUs 
+    and prints the resulting list in JSON format with indentation.
 
-Este script é útil para identificar e listar todas as OUs aninhadas dentro de uma OU específica, facilitando a gestão de 
-estruturas organizacionais do AWS Organizations.
+This script is useful for identifying and listing all nested OUs within a specific OU, facilitating the management of 
+organizational structures in AWS Organizations.
 """
 
-# Inicializar o cliente AWS Organizations
+# Initialize the AWS Organizations client
 client = boto3.client('organizations')
 
 

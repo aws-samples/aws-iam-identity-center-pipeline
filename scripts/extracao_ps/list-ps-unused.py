@@ -2,27 +2,27 @@ import boto3
 
 
 """
-Este script lista os Permission Sets não utilizados no AWS SSO. Ele realiza as seguintes operações:
+This script lists the unused Permission Sets in AWS SSO. It performs the following operations:
 
-1. Importação de bibliotecas: Importa as bibliotecas `boto3`.
+1. Importing libraries: Imports the `boto3` library.
 
-2. Configuração do cliente SSO Admin e Organizations: Inicializa os clientes boto3 para interagir com os serviços AWS SSO Admin
- e AWS Organizations.
+2. Configuring the SSO Admin and Organizations client: Initializes the boto3 clients to interact with AWS SSO Admin
+    and AWS Organizations services.
 
-3. Funções auxiliares:
-    - `list_accounts()`: Lista todas as contas na organização, retornando uma lista de IDs de contas.
-    - `list_permission_sets(instance_arn)`: Lista todos os Permission Sets associados a uma instância do AWS SSO.
+3. Helper functions:
+     - `list_accounts()`: Lists all accounts in the organization, returning a list of account IDs.
+     - `list_permission_sets(instance_arn)`: Lists all Permission Sets associated with an AWS SSO instance.
 
-4. Função principal:
-    - `main()`: Define o ARN da instância do AWS SSO, obtém a lista de contas, lista todos os Permission Sets 
-    e verifica se cada Permission Set está associado a alguma conta. Os Permission Sets não utilizados são exibidos no terminal.
+4. Main function:
+     - `main()`: Defines the ARN of the AWS SSO instance, gets the list of accounts, lists all Permission Sets,
+        and checks if each Permission Set is associated with any account. The unused Permission Sets are displayed in the terminal.
 
-Este script é útil para identificar Permission Sets que não estão sendo utilizados, facilitando a gestão e o controle de 
-permissões em ambientes multi-conta.
+This script is useful for identifying Permission Sets that are not being used, facilitating the management and control of
+permissions in multi-account environments.
 """
 
-# Configuração do cliente SSO Admin e ORG
-client = boto3.client('sso-admin', region_name='us-east-1')  # Defina a região apropriada
+# Configuring the SSO Admin and Organizations client
+client = boto3.client('sso-admin', region_name='us-east-1')
 org_client = boto3.client('organizations')
 
 
@@ -30,13 +30,13 @@ def list_accounts():
     accounts = []
     account_ids = []
     
-    # Listar contas na organização
+    # List accounts in the organization
     response = org_client.list_accounts()
 
-    # Adicionar contas à lista
+    # Add accounts to the list
     accounts.extend(response['Accounts'])
 
-    # Verificar se há mais contas (paginação)
+    # Pagination
     while 'NextToken' in response:
         response = org_client.list_accounts(NextToken=response['NextToken'])
         accounts.extend(response['Accounts'])
@@ -48,13 +48,13 @@ def list_accounts():
 
 
 def list_permission_sets(instance_arn):
-    """Lista todos os PermissionSets de uma instância do AWS Identity Center."""
+    """Lists all Permission Sets of an AWS Identity Center instance."""
     response = client.list_permission_sets(InstanceArn=instance_arn)
     return response['PermissionSets']
 
 
 def list_account_assignments(instance_arn, account_id, permission_set_arn):
-    """Verifica se um PermissionSet está associado a uma conta específica."""
+    """Checks if a Permission Set is associated with a specific account."""
     response = client.list_account_assignments(
         InstanceArn=instance_arn,
         AccountId=account_id,
@@ -65,21 +65,21 @@ def list_account_assignments(instance_arn, account_id, permission_set_arn):
 
 
 def main():
-    instance_arn = 'arn:aws:sso:::instance/ssoins-12345678abc'  # Substitua pelo seu ARN de instância
+    instance_arn = 'arn:aws:sso:::instance/ssoins-12345678abc'
     accounts = list_accounts()
-    permission_sets = list_permission_sets(instance_arn)  # Lista de PermissionSets
+    permission_sets = list_permission_sets(instance_arn)
 
     unused_permission_sets = []
 
-    # Para cada PermissionSet, verifica se ele está associado a alguma conta
+    # For each PermissionSet, check if it is associated with any account
     for permission_set in permission_sets:
-        permission_set_arn = permission_set  # ARN do PermissionSet
-        used = False  # Flag para verificar se o PermissionSet está sendo utilizado
+        permission_set_arn = permission_set
+        used = False
 
         for account_id in accounts:
             associations = list_account_assignments(instance_arn, account_id, permission_set_arn)
             
-            # Se o PermissionSet estiver associado, marque como utilizado
+            # If the PermissionSet is associated, mark it as used
             if associations:
                 used = True
                 break
@@ -87,7 +87,7 @@ def main():
         if not used:
             unused_permission_sets.append(permission_set_arn)
     
-    print("PermissionSets não utilizados:")
+    print("Unused PermissionSets:")
     for ps in unused_permission_sets:
         print(ps)
 

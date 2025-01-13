@@ -3,32 +3,32 @@ import json
 
 
 """
-Este script interage com o AWS SSO Admin para listar e obter detalhes sobre os Permission Sets e gerar arquivos de Permission Sets 
-para a pipeline. Ele realiza as seguintes operações:
+This script interacts with AWS SSO Admin to list and obtain details about Permission Sets and generate Permission Set files 
+for the pipeline. It performs the following operations:
 
-1. Importação de bibliotecas: Importa as bibliotecas `boto3` e `json`.
+1. Importing libraries: Imports the `boto3` and `json` libraries.
 
-2. Inicialização do cliente AWS SSO Admin: Inicializa o cliente boto3 para interagir com o serviço AWS SSO Admin.
+2. Initializing the AWS SSO Admin client: Initializes the boto3 client to interact with the AWS SSO Admin service.
 
-3. Funções auxiliares:
-    - `list_permission_sets(instance_arn)`: Lista todos os Permission Sets associados a uma instância do AWS SSO utilizando um paginador.
-    - `get_permission_set_details(instance_arn, permission_set_arn)`: Obtém os detalhes de um Permission Set específico a partir de seu ARN.
-    - `get_managed_policies(instance_arn, permission_set_arn)`: Obtém as políticas gerenciadas associadas a um Permission Set específico.
+3. Helper functions:
+    - `list_permission_sets(instance_arn)`: Lists all Permission Sets associated with an SSO instance using a paginator.
+    - `get_permission_set_details(instance_arn, permission_set_arn)`: Gets the details of a specific Permission Set by its ARN.
+    - `get_managed_policies(instance_arn, permission_set_arn)`: Gets the managed policies associated with a specific Permission Set.
 
-4. Função principal:
-    - `process_permission_set(instance_arn, permission_set_arn)`: Processa um Permission Set específico, obtendo seus detalhes, políticas
-    gerenciadas e política personalizada.
-    - `main()`: Lista e processa todos os Permission Sets associados a uma instância do AWS SSO, salvando os resultados em um arquivo JSON.
+4. Main function:
+    - `process_permission_set(instance_arn, permission_set_arn)`: Processes a specific Permission Set, obtaining its details, managed
+    policies, and custom policy.
+    - `main()`: Lists and processes all Permission Sets associated with an SSO instance, saving the results in a JSON file.
     
-Este script é útil para gerenciar e auditar os Permission Sets no AWS SSO, facilitando a administração de permissões em ambientes 
-multi-conta.
+This script is useful for managing and auditing Permission Sets in AWS SSO, facilitating permission administration in multi-account 
+environments.
 """
 
-# Inicializar o cliente do AWS SSO Admin
+# Inicialization of the AWS SSO Admin client
 client = boto3.client('sso-admin')
 
 
-# Função para listar todos os permission sets
+# Function to list all permission sets
 def list_permission_sets(instance_arn):
     paginator = client.get_paginator('list_permission_sets')
     permission_sets = []
@@ -37,7 +37,7 @@ def list_permission_sets(instance_arn):
     return permission_sets
 
 
-# Função para obter detalhes de um permission set
+# Function for get permissionset details
 def get_permission_set_details(instance_arn, permission_set_arn):
     response = client.describe_permission_set(
         InstanceArn=instance_arn,
@@ -46,7 +46,7 @@ def get_permission_set_details(instance_arn, permission_set_arn):
     return response['PermissionSet']
 
 
-# Função para obter as políticas gerenciadas associadas a um permission set
+# Function to retrieve the managed policies associated with a permission set
 def get_managed_policies(instance_arn, permission_set_arn):
     response = client.list_managed_policies_in_permission_set(
         InstanceArn=instance_arn,
@@ -55,7 +55,7 @@ def get_managed_policies(instance_arn, permission_set_arn):
     return response['AttachedManagedPolicies']
 
 
-# Função para obter a política personalizada associada a um permission set
+# Function to get the custom policy associated with a permission set
 def get_custom_policy(instance_arn, permission_set_arn):
     response = client.get_inline_policy_for_permission_set(
         InstanceArn=instance_arn,
@@ -64,18 +64,18 @@ def get_custom_policy(instance_arn, permission_set_arn):
     return response.get('InlinePolicy', {})
 
 
-# Função para processar um permission set
+# Function for processing permissionset
 def process_permission_set(instance_arn, permission_set_arn):
     details = get_permission_set_details(instance_arn, permission_set_arn)
     
-    # Extrair as informações necessárias
+    # Extract necessary information
     name = details.get("Name")
     description = details.get("Description")
     session_duration = details.get("SessionDuration")
     managed_policies = get_managed_policies(instance_arn, permission_set_arn)
     custom_policy = get_custom_policy(instance_arn, permission_set_arn)
     
-    # Formatar no modelo da pipeline
+    # Format the permission set pipeline model
     formatted_permission_set = {
         "Name": name,
         "Description": description,
@@ -87,9 +87,9 @@ def process_permission_set(instance_arn, permission_set_arn):
     return formatted_permission_set
 
 
-# Função principal para listar e processar todos os permission sets
+# Main function to list and process all permission sets
 def main():
-    # Substitua pelo ARN da instância do AWS SSO
+    # Substitute to ARN of AWS SSO instance
     instance_arn = 'arn:aws:sso:::instance/ssoins-12345678abc'
 
     permission_sets = list_permission_sets(instance_arn)
@@ -99,13 +99,12 @@ def main():
         formatted_permission_set = process_permission_set(instance_arn, permission_set_arn)
         formatted_permission_sets.append(formatted_permission_set)
     
-    # Salvar os permission sets formatados em um novo arquivo JSON
+    # Save the formatted permission sets in a new JSON file
     with open('templates/permissionsets/formatted_permission_sets.json', 'w') as file:
         json.dump(formatted_permission_sets, file, indent=4)
     
-    print("Permission sets processados e salvos em formatted_permission_sets.json")
+    print("Permission sets processed and saved in formatted_permission_sets.json")
 
 
-# Executar a função principal
 if __name__ == "__main__":
     main()

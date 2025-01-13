@@ -3,30 +3,30 @@ import os
 
 
 """
-Este script lê um arquivo JSON contendo Permission Sets formatados e gera arquivos separados para cada Permission Set. 
-Ele realiza as seguintes operações:
+This script reads a JSON file containing formatted Permission Sets and generates separate files for each Permission Set.
+It performs the following operations:
 
-1. Importação de bibliotecas: Importa as bibliotecas `json` e `os`.
+1. Importing libraries: Imports the `json` and `os` libraries.
 
-2. Função principal:
-    - `generate_permission_set_files(input_file, output_directory)`: Lê o arquivo `formatted_permission_sets.json`, garante que o diretório 
-    de saída exista, e para cada Permission Set, gera um arquivo JSON separado no diretório de saída.
+2. Main function:
+    - `generate_permission_set_files(input_file, output_directory)`: Reads the `formatted_permission_sets.json` file, ensures the output 
+    directory exists, and for each Permission Set, generates a separate JSON file in the output directory.
 
-3. Atenção aos nomes dos arquivo templates e diretórios
+3. Attention to the names of the template files and directories.
 
-Este script é útil para organizar e separar os Permission Sets em arquivos individuais, facilitando a gestão e o controle de permissões em ambientes multi-conta.
+This script is useful for organizing and separating Permission Sets into individual files, making it easier to manage and control permissions in multi-account environments.
 """
 
-# Função para ler o arquivo formatted_permission_sets.json e gerar arquivos separados
+# Function to read the formatted_permission_sets.json file and generate separate files
 def generate_permission_set_files(input_file, output_directory):
-    # Certifique-se de que o diretório de saída existe
+    # Ensure the output directory exists
     os.makedirs(output_directory, exist_ok=True)
     
-    # Ler o arquivo formatted_permission_sets.json
+    # Read the formatted_permission_sets.json file
     with open(input_file, 'r') as file:
         permission_sets = json.load(file)
     
-    # Para cada permission set, gerar um arquivo separado
+    # For each permission set, generate a separate file
     for permission_set in permission_sets:
         name = permission_set['Name']
         output_file = os.path.join(output_directory, f"{name}.json")
@@ -34,14 +34,13 @@ def generate_permission_set_files(input_file, output_directory):
         with open(output_file, 'w') as outfile:
             json.dump(permission_set, outfile, indent=4)
         
-        print(f"Arquivo gerado: {output_file}")
+        print(f"Generated file: {output_file}")
 
 
-# Executar a função principal
 if __name__ == "__main__":
-    # Caminho do arquivo de entrada e diretório de saída
+    # Path of the input file and output directory
     input_file = 'templates/permissionsets/formatted_permission_sets.json'
     output_directory = 'templates/permissionsets/'
 
-    # Executar a função para gerar os arquivos separados
+    # Execute the function to generate the separate files
     generate_permission_set_files(input_file, output_directory)

@@ -2,30 +2,30 @@ import json
 
 
 """
-Este script remove blocos de um arquivo JSON de associações de permissões que contêm a palavra "ControlTower" em qualquer valor. Ele realiza as seguintes operações:
+This script removes blocks from a JSON file of permission assignments that contain the word "ControlTower" in any value. It performs the following operations:
 
-1. Importação de bibliotecas: Importa a biblioteca `json` da coleção padrão do Python.
+Importing libraries: Imports the json library from Python's standard collection.
 
-2. Carregamento do JSON: Carrega o arquivo JSON localizado em `templates/assignments/optimized_template_associacoes_updated.json`.
+Loading the JSON: Loads the JSON file located at templates/assignments/optimized_template_associacoes_updated.json.
 
-3. Filtragem dos blocos: Filtra os blocos que não contêm "ControlTower" em qualquer valor, criando uma nova lista de associações filtradas.
+Filtering the blocks: Filters the blocks that do not contain "ControlTower" in any value, creating a new list of filtered assignments.
 
-4. Salvamento do JSON filtrado: Salva o JSON filtrado em um novo arquivo localizado em `templates/assignments/filtered_template_associacoes.json`.
+Saving the filtered JSON: Saves the filtered JSON to a new file located at templates/assignments/filtered_template_associacoes.json.
 
-Este script é útil para remover associações específicas relacionadas ao ControlTower, facilitando a gestão e o controle de acesso em ambientes multi-conta.
+This script is useful for removing specific assignments related to ControlTower, facilitating access management and control in multi-account environments.
 """
 
-# Carregar o JSON
+# Load JSON file
 with open('templates/assignments/optimized_template_associacoes_updated.json', 'r') as file:
     data = json.load(file)
 
-# Filtrar os blocos que não contêm "ControlTower" em qualquer valor
+# Filter the blocks that do not contain "ControlTower" in any value
 filtered_assignments = [
     assignment for assignment in data['Assignments']
     if not any("ControlTower" in str(value) for value in assignment.values())
 ]
 
-# Salvar o JSON filtrado
+# Save filtered JSON to a new file
 filtered_data = {"Assignments": filtered_assignments}
 
 with open('templates/assignments/filtered_template_associacoes.json', 'w') as file:

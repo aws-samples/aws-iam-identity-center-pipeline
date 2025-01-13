@@ -3,31 +3,31 @@ from collections import defaultdict
 
 
 """
-Este script otimiza um arquivo JSON de associações de permissões, agrupando as associações por `PrincipalId` e `PermissionSetName`. Ele realiza as seguintes operações:
+This script optimizes a JSON file of permission assignments by grouping the assignments by PrincipalId and PermissionSetName. It performs the following operations:
 
-1. Importação de bibliotecas: Importa as bibliotecas `json` e `defaultdict` da coleção padrão do Python.
+Importing libraries: Imports the json and defaultdict libraries from Python's standard collection.
 
-2. Carregamento do JSON: Carrega o arquivo JSON localizado em `templates/assignments/template_associacoes.json`.
+Loading the JSON: Loads the JSON file located at templates/assignments/template_associacoes.json.
 
-3. Agrupamento de associações: Agrupa as associações por `PrincipalId` e `PermissionSetName` utilizando um `defaultdict` aninhado. Cada grupo contém:
-    - `SID`: Identificador da associação.
-    - `Target`: Lista de alvos associados.
-    - `PrincipalType`: Tipo do principal (USER ou GROUP).
-    - `PrincipalId`: Identificador do principal.
-    - `PermissionSetName`: Nome do Permission Set.
+Grouping assignments: Groups the assignments by PrincipalId and PermissionSetName using a nested defaultdict. Each group contains:
 
-4. Criação de uma nova lista de associações otimizadas: Inicializa uma lista vazia para armazenar as associações otimizadas.
+SID: Assignment identifier.
+Target: List of associated targets.
+PrincipalType: Type of the principal (USER or GROUP).
+PrincipalId: Principal's identifier.
+PermissionSetName: Name of the Permission Set.
+Creating a new list of optimized assignments: Initializes an empty list to store the optimized assignments.
 
-5. Atenção aos nomes dos templates que estão sendo utilizados: `template_associacoes.json` e `optimized_template_associacoes.json`. Se necessário, ajuste os nomes dos arquivos.
+Attention to the template names being used: template_associacoes.json and optimized_template_associacoes.json. If necessary, adjust the file names.
 
-Este script é útil para reduzir a redundância e otimizar a estrutura de dados das associações de permissões, facilitando a gestão e o controle de acesso em ambientes multi-conta.
+This script is useful for reducing redundancy and optimizing the data structure of permission assignments, facilitating access management and control in multi-account environments.
 """
 
-# Carregar o JSON
+# Load the JSON file
 with open('templates/assignments/template_associacoes.json', 'r') as file:
     data = json.load(file)
 
-# Agrupar por PrincipalId e PermissionSetName
+# Grouping for PrincipalId and PermissionSetName
 grouped = defaultdict(lambda: defaultdict(lambda: {
     "SID": None,
     "Target": [],
@@ -46,7 +46,7 @@ for assignment in data['Assignments']:
     grouped[principal_id][permission_set_name]["PrincipalId"] = principal_id
     grouped[principal_id][permission_set_name]["PermissionSetName"] = permission_set_name
 
-# Criar uma nova lista de associações otimizadas
+# Create the new list of optimizations assignments
 optimized_assignments = []
 
 for principal_id, permissions in grouped.items():
@@ -59,7 +59,7 @@ for principal_id, permissions in grouped.items():
             "PermissionSetName": details["PermissionSetName"]
         })
 
-# Salvar o JSON otimizado
+# Save optimized JSON file
 optimized_data = {"Assignments": optimized_assignments}
 
 with open('templates/assignments/optimized_template_associacoes.json', 'w') as file:

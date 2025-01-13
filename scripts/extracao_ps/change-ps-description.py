@@ -3,25 +3,25 @@ import json
 
 
 """
-Este script atualiza a descrição dos Permission Sets em arquivos JSON. Ele realiza as seguintes operações:
+This script updates the description of Permission Sets in JSON files. It performs the following operations:
 
-1. Importação de bibliotecas: Importa as bibliotecas `os` e `json`.
+1. Importing libraries: Imports the `os` and `json` libraries.
 
-2. Definição do diretório: Define o diretório contendo os arquivos JSON dos Permission Sets.
+2. Directory definition: Defines the directory containing the JSON files of the Permission Sets.
 
-3. Função principal:
-    - `process_permission_sets(directory)`: Percorre todos os arquivos JSON no diretório especificado, verifica se o campo 
-    `Description` está vazio ou nulo, e atualiza o campo com "ps-description". As alterações são salvas no próprio arquivo.
+3. Main function:
+    - `process_permission_sets(directory)`: Iterates through all JSON files in the specified directory, checks if the 
+    `Description` field is empty or null, and updates the field with "ps-description". The changes are saved in the file itself.
 
-Este script é útil para garantir que todos os Permission Sets tenham uma descrição padrão, facilitando a gestão
- e o controle de permissões em ambientes multi-conta.
+This script is useful to ensure that all Permission Sets have a standard description, facilitating the management and 
+control of permissions in multi-account environments.
 """
 
-# Diretório contendo os arquivos JSON
+# JSON template file directory
 directory = 'templates/permissionsets/'
 
 
-# Função para processar cada arquivo JSON
+# Function to process each JSON file
 def process_permission_sets(directory):
     for filename in os.listdir(directory):
         if filename.endswith('.json'):
@@ -29,12 +29,12 @@ def process_permission_sets(directory):
             with open(file_path, 'r') as file:
                 data = json.load(file)
             
-            # Verificar e substituir o campo Description
+            # Check and replace the Description field
             if 'Description' in data and (data['Description'] is None or data['Description'] == ''):
                 data['Description'] = "ps-description"
-                print(f"Atualizando arquivo: {file_path}")
+                print(f"Updating file: {file_path}")
                 
-                # Salvar as alterações no arquivo
+                # Save changes in the file
                 with open(file_path, 'w') as file:
                     json.dump(data, file, indent=4)
 
