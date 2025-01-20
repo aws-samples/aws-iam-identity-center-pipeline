@@ -46,6 +46,7 @@ Parameters:
     Description: "Prefix that will be used to name resources in this stack within the AWS IAM Identity Center Delegated Admin account (e.g. roles, events, pipeline)"
     Type: String
     Default: "iam-idc"
+    MaxLength: 21
   s3NameConvention:
     Description: "Prefix that will be used to name S3 buckets.  Recommended to mirror nameConvention, but MUST use all lowercase"
     Type: String
