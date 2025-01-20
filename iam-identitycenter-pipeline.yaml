@@ -59,7 +59,7 @@ Parameters:
     Type: String
     Default: 365
   providerType:
-    Description: "Repository provider type. Ex: GitHub"
+    Description: "Repository provider type. Ex: Bitbucket, GitHub, GitHubEnterpriseServer, GitLab, GitLabSelfManage"
     Type: String
     Default: "GitHub"
   fullRepositoryId:
@@ -85,7 +85,7 @@ Conditions:
 
 Resources:
   ## +-------
-  ## | SNS Topics (CodeBuild Error and CodeCommit Notifications)
+  ## | SNS Topics (CodeBuild Error)
   ## +---------------
   CodeBuildSNSTopic:
     Type: AWS::SNS::Topic
@@ -409,6 +409,7 @@ Resources:
     Properties:
       RoleArn: !GetAtt PipelineRole.Arn
       Name: !Sub "${nameConvention}-pipeline"
+      PipelineType: "V2"
       ArtifactStore:
         Type: S3
         Location: !Ref artifactsBucket
@@ -857,7 +858,7 @@ Resources:
             install:
               commands:
                 - echo "[INFO] [INSTALL] Installing dependencies"
-                - wget https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
+                - wget https://releases.hashicorp.com/terraform/1.7.5/terraform_1.10.4_linux_amd64.zip
                 - unzip terraform_*_linux_amd64.zip -d /usr/bin/
                 - chmod +x /usr/bin/terraform
                 - echo "[INFO] [INSTALL] Installing finished"                    

@@ -5,7 +5,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [2.0.0] - 2025-01-03
-Previous versions of the pipeline assign permissions in Organization Units (OUs) by using its name. However, AWS Organization allows multiple OUs with the same name. To address that, I have changed how you specify Targets in the assignment template file. Now you need to specify using the format {{ou_name}}:{{ou_id}} or {{account_name}}:{{acount_id}} to ensure you are assigning permission in the correct OU. Using “Root” as a target to assign permission in all AWS accounts is still valid.
+Previous versions of the pipeline assign permissions in Organization Units (OUs) by using its name. However, AWS Organization allows multiple OUs with the same name. To address that, I have changed how you specify Targets in the assignment template file. Now you need to specify using the format {{ou_name}}:{{ou_id}} or {{account_name}}:{{acount_id}} to ensure you are assigning permission in the correct OU. Using “Root:r-rootid” as a target to assign permission in all AWS accounts is valid.
 
 ### Added
 - Added a new feature for assigning permission in accounts that are inside nested OUs. When specifying an OU, you can append a wildcard at the end of the OU name to instruct the pipeline to list all AWS accounts inside all nested OUs recursively. 
