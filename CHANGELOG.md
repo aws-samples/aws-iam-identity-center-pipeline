@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [2.0.0] - 2025-01-03
+Previous versions of the pipeline assign permissions in Organization Units (OUs) by using its name. However, AWS Organization allows multiple OUs with the same name. To address that, I have changed how you specify Targets in the assignment template file. Now you need to specify using the format {{ou_name}}:{{ou_id}} or {{account_name}}:{{acount_id}} to ensure you are assigning permission in the correct OU. Using “Root:r-rootid” as a target to assign permission in all AWS accounts is valid.
+
+### Added
+- Added a new feature for assigning permission in accounts that are inside nested OUs. When specifying an OU, you can append a wildcard at the end of the OU name to instruct the pipeline to list all AWS accounts inside all nested OUs recursively. 
+    - Example: dev-ou:ou-x129x102x:*
+- Relay State: You can now add RelayState to your permission sets by adding the field "RelayState" in permission sets template. If you don't specify the field RelayState, it will use the default AWS Management Console page.
+
+### Changed
+- AWS CodeCommit is no longer available to new customers. Existing customers of AWS CodeCommit can continue to use the service as normal. The pipeline now supports using alternative source repository (e.g. GitHub). Support for AWS CodeCommit was removed. Resources related to CodeCommit were also removed.
+- AWS CodePipeline stages were optimized. In previous versions we had one stage for each deployment phase (i.e., Permission Set stage and Assignments Stage). We now have a single stage called Deploy with two action groups (PermissionSet and Assignment).
+- AWS Organization launched delegated administrator for AWS Organizations to help you delegate the management of your Organizations. Because of that, the IAM role being used to query AWS Organizatons in the management account is no longer required. You now have to delegate AWS Organization to the pipeline account before implementing it.
+- Updated Terraform 1.7.5 to version 1.10.4.
+
+### Fixed
+- Previous versions of the pipeline assign permissions in Organization Units (OUs) by using its name. However, AWS Organization allows multiple OUs with the same name. To address that, I have changed how you specify Targets in the assignment template file. Now you need to specify using the format {{ou_name}}:{{ou_id}} or {{account_name}}:{{acount_id}} to ensure you are assigning permission in the correct OU. Using “Root” as a target to assign permission in all AWS accounts is still valid.
+
 ## [1.3.0] - 2024-03-28
 ### Added
 - Added notification capability for failures in pipeline and CodeCommit status change

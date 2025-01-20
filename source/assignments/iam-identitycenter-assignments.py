@@ -24,6 +24,7 @@ import logging
 from botocore.config import Config
 import re
 import argparse
+import traceback
 
 # Logging configuration
 logging.basicConfig(format='%(asctime)s,%(msecs)03d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
@@ -42,7 +43,6 @@ config = Config(
 
 # Setting arguments
 parser = argparse.ArgumentParser(description='AWS SSO Permission Set Management')
-parser.add_argument('--org_role', action="store", dest='orgRole')
 parser.add_argument('--mgmt_account', action="store", dest='mgmtAccount')
 
 args = parser.parse_args()
@@ -85,63 +85,94 @@ def load_assignments_from_file():
 
 
 
-def resolve_ou_names(ouid, client):
-    response = client.list_organizational_units_for_parent(ParentId=ouid)
-    results = response['OrganizationalUnits']
+def list_all_accounts():
+    client = boto3.client('organizations')
+
+    response = client.list_accounts()
+    results = response["Accounts"]
     while "NextToken" in response:
-        response = client.list_organizational_units_for_parent(ParentId=ouid, NextToken=response["NextToken"]) 
-        results.extend(response["OrganizationalUnits"])
+        response = client.list_accounts(NextToken=response["NextToken"]) 
+        results.extend(response["Accounts"])
+
+    accounts = []
+    for eachAccount in results:
+        if eachAccount['Status'] == 'ACTIVE':
+            accounts.append(eachAccount['Id'])
     
-    if results:
-        for eachOU in results:
-            results.extend(resolve_ou_names(eachOU['Id'], client))
+    return accounts
+
+def list_active_accounts_in_ou_not_nested(ou_id):
+    client = boto3.client('organizations')
+
+    def get_active_accounts_in_ou(ou_id):
+        active_accounts = []
+        paginator = client.get_paginator('list_accounts_for_parent')
+        
+        for page in paginator.paginate(ParentId=ou_id):
+            for account in page['Accounts']:
+                if account['Status'] == 'ACTIVE':
+                    active_accounts.append(account['Id'])
+        
+        return active_accounts
     
-    return results
+    return get_active_accounts_in_ou(ou_id)
+
+def list_accounts_in_ou_nested(ou_id):
+    client = boto3.client('organizations')
+    def get_accounts_in_ou(ou_id):
+        accounts = []
+        paginator = client.get_paginator('list_accounts_for_parent')
+        
+        for page in paginator.paginate(ParentId=ou_id):
+            for account in page['Accounts']:
+                if account["Status"] == "ACTIVE":
+                    accounts.append(account['Id'])
+        
+        return accounts
+    
+    def get_nested_ous(ou_id):
+        ous = []
+        paginator = client.get_paginator('list_organizational_units_for_parent')
+        
+        for page in paginator.paginate(ParentId=ou_id):
+            for ou in page['OrganizationalUnits']:
+                ous.append(ou['Id'])
+        
+        return ous
+    
+    def list_all_accounts_recursive(ou_id):
+        all_accounts = get_accounts_in_ou(ou_id)
+        nested_ous = get_nested_ous(ou_id)
+        
+        for nested_ou_id in nested_ous:
+            all_accounts.extend(list_all_accounts_recursive(nested_ou_id))
+        
+        return all_accounts
+
+    return list_all_accounts_recursive(ou_id)
 
 def list_accounts_in_ou(ouid):
-    client = boto3.client('organizations', config=config, aws_access_key_id=credentials['AccessKeyId'], aws_secret_access_key=credentials['SecretAccessKey'], aws_session_token=credentials['SessionToken'])
+    client = boto3.client('organizations', config=config)
+    root_id = client.list_roots()['Roots'][0]['Id']
+    
     try:
+        account_list = []
         if 'ou-' in ouid:
-            response = client.list_accounts_for_parent(ParentId=ouid)
-            results = response["Accounts"]
-            while "NextToken" in response:
-                response = client.list_accounts_for_parent(ParentId=ouid, NextToken=response["NextToken"]) 
-                results.extend(response["Accounts"])
-        elif 'r-' in ouid:
-            response = client.list_accounts()
-            results = response["Accounts"]
-            while "NextToken" in response:
-                response = client.list_accounts(NextToken=response["NextToken"]) 
-                results.extend(response["Accounts"])
-        elif 'Root' in ouid:
-            response = client.list_accounts()
-            results = response["Accounts"]
-            while "NextToken" in response:
-                response = client.list_accounts(NextToken=response["NextToken"]) 
-                results.extend(response["Accounts"])                
+            if ':*' in ouid:
+                log.info(f"[OU: {ouid}] Nested association found (:*). Listing accounts inside nested OUs.")
+                account_list = list_accounts_in_ou_nested(str(ouid.split(":")[0]))
+            else:
+                account_list = list_active_accounts_in_ou_not_nested(ouid)
+        elif root_id in ouid or 'ROOT' in ouid.upper():
+            account_list = list_all_accounts()      
         else:
-            results = []
-            rootid = client.list_roots()['Roots'][0]['Id']
-            log.info(f"{rootid} Trying to identify accounts for OU name")
-            results = resolve_ou_names(rootid, client)
-            for eachOu in results:
-                if eachOu['Name'] == str(ouid):
-                    newOuId = eachOu['Id']
-                    log.info(f"[OU: {ouid}] Organization Unit ID found for OU name")
-                    break
-            response = client.list_accounts_for_parent(ParentId=newOuId)
-            results = response["Accounts"]
-            while "NextToken" in response:
-                response = client.list_accounts_for_parent(ParentId=ouid, NextToken=response["NextToken"]) 
-                results.extend(response["Accounts"])
-
+            log.error('Target is not in valid format.')
+            exit (1)
+                
     except Exception as error:
         log.error('It was not possible to list accounts from Organization Unit. Reason: ' + str(error))
-
-    account_list = []
-    for eachResult in results:
-        if eachResult["Status"] == "ACTIVE":
-            account_list.append(eachResult['Id'])
+        log.error(traceback.format_exc())
+        exit (1)
     return account_list
 
 def lookup_principal_id(principalName, principalType):
@@ -171,60 +202,26 @@ def lookup_principal_id(principalName, principalType):
             return response['Users'][0]['UserId']
     except Exception as error:
         log.error(f"[PR: {principalName}] [{principalType}]  It was not possible lookup target. Reason: " + str(error))
+        log.error(traceback.format_exc())
 
 def resolve_targets(eachCurrentAssignments):
-    client = boto3.client('sso-admin', config=config)
     try:
         account_list = []
         log.info(f"[SID: {eachCurrentAssignments['SID']}] Resolving target in accounts")
         for eachTarget in eachCurrentAssignments['Target']:
             pattern = re.compile(r'\d{12}') # Regex for AWS Account Id
-            if pattern.match(eachTarget):
-                account_list.append(eachTarget)
+            if pattern.match(eachTarget.split(":")[1]):
+                account_list.append(eachTarget.split(":")[1])
             else:
-                account_list.extend(list_accounts_in_ou(eachTarget))                
+                account_list.extend(list_accounts_in_ou(eachTarget.split(":", 1)[1]))                
         return account_list
     except Exception as error:
         log.error(f"[SID: {eachCurrentAssignments['SID']}] It was not possible to resolve the targets from assignment. Reason: " + str(error))
-
-
-
-def list_permission_in_sso_for_user(permissionSet, eachRepositoryAssignments):
-    
-    account_list = []
-    try:
-        # List all accounts with specific permission set
-        client = boto3.client('sso-admin', config=config)
-        response = client.list_accounts_for_provisioned_permission_set(InstanceArn=ssoInstanceArn,PermissionSetArn=permissionSet)
-        results = response["AccountIds"]
-        while "NextToken" in response:
-            response = client.list_accounts_for_provisioned_permission_set(InstanceArn=ssoInstanceArn,PermissionSetArn=permissionSet, NextToken=response["NextToken"])
-            results.extend(response["AccountIds"])
-        log.info(f"[SID: {eachRepositoryAssignments['SID']}] [PR: {eachRepositoryAssignments['PrincipalId']}] [{eachRepositoryAssignments['PrincipalType']}] Looking up principal ID")
-        principalId = lookup_principal_id(eachRepositoryAssignments['PrincipalId'], eachRepositoryAssignments['PrincipalType'])
-
-        # For each account, list assignments
-        for eachAccount in response["AccountIds"]:
-            assignmentsResponse = client.list_account_assignments(
-                InstanceArn=ssoInstanceArn,
-                AccountId=eachAccount,
-                PermissionSetArn=permissionSet
-            )
-
-            # For each assingment, check if it is associated to a specific principalId
-            for eachuser in assignmentsResponse['AccountAssignments']:
-                if principalId == eachuser['PrincipalId']:
-                    account_list.append(eachAccount)
-    except Exception as error:
-        log.error(f"[SID: {eachRepositoryAssignments['SID']}] It was not possible to list permissions for a specific user. Reason: " + str(error))
-
-    return account_list
-
+        log.error(traceback.format_exc())
 
 
 def create_assignment_file(permissionSetsArn,repositoryAssignments):
     log.info('Creating assignment file')
-    client = boto3.client('sso-admin', config=config)
     
     try:
         for assignment in repositoryAssignments['Assignments']:
@@ -245,6 +242,7 @@ def create_assignment_file(permissionSetsArn,repositoryAssignments):
         return True
     except Exception as error:
         log.error("Error: " + str(error))
+        log.error(traceback.format_exc())
         exit (1)
 
 def main():
@@ -258,17 +256,10 @@ def main():
     global identitystore
     global resolvedAssingmnets
     global managementAccount
-    global credentials
     resolvedAssingmnets = {}
     resolvedAssingmnets['Assignments'] = []
 
     managementAccount = args.mgmtAccount
-
-    # Assume role in management account
-    mgmt_role = args.orgRole
-    sts_client = boto3.client('sts', config=config)
-    assumed_role_object=sts_client.assume_role(RoleArn=mgmt_role,RoleSessionName="identitycenter-pipeline")
-    credentials=assumed_role_object['Credentials']
 
     # Get Identity Store and SSO Instance ARN
     sso_client = boto3.client('sso-admin', config=config)
@@ -290,5 +281,5 @@ def main():
     with open('assignments.json', 'w') as convert_file:
         convert_file.write(json.dumps(seen))
     
-    log.info('Association file successfully created.')
+    log.info('Association file created.')
 main()

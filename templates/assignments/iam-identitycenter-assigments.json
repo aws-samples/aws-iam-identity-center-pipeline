@@ -3,9 +3,9 @@
         {
             "SID": "SecurityAssignment",
             "Target": [
-                "ou-xxxx-yyyyyyyy",
-                "ou-zzzz-xxxxxxxx",
-                "123456789012"
+                "ou-name-1:ou-xxxx-yyyyyyyy",
+                "ou-name-2:ou-zzzz-xxxxxxxx",
+                "account-name:123456789012"
             ],
             "PrincipalType": "GROUP",
             "PrincipalId": "AD_SECURITY_ADMIN@domain.internal",
@@ -14,7 +14,7 @@
         {
             "SID": "PersonalAdmin",
             "Target": [
-                "r-xxxx"
+                "Root"
             ],
             "PrincipalType": "USER",
             "PrincipalId": "my_user@domain.internal",
@@ -23,8 +23,8 @@
         {
             "SID": "Specificaccounts",
             "Target": [
-                "098765432101",
-                "123456789012"
+                "account_name_2:098765432101",
+                "account_name_3:123456789012"
             ],
             "PrincipalType": "GROUP",
             "PrincipalId": "AD_PRODUCT_OWNER@domain.internal",
@@ -33,7 +33,7 @@
         {
             "SID": "DatabaseBaseline",
             "Target": [
-                "ou-xxxx-yyyyyyyy"
+                "ou_name_recursive:ou-xxxx-yyyyyyyy:*"
             ],
             "PrincipalType": "GROUP",
             "PrincipalId": "AD_DB_ADMIN@domain.internal",

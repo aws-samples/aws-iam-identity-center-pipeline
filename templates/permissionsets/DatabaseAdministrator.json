@@ -2,6 +2,7 @@
     "Name": "DatabaseAdministrator",
     "Description": "Manage database in AWS.",
     "SessionDuration": "PT4H",
+    "RelayState": "https://console.aws.amazon.com/ec2/",
     "ManagedPolicies": [
         "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess"
     ],
