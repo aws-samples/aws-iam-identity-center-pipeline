@@ -7,7 +7,7 @@ This script optimizes a JSON file of permission assignments by grouping the assi
 
 Importing libraries: Imports the json and defaultdict libraries from Python's standard collection.
 
-Loading the JSON: Loads the JSON file located at templates/assignments/template_associacoes.json.
+Loading the JSON: Loads the JSON file located at templates/assignments/template_assignments.json.
 
 Grouping assignments: Groups the assignments by PrincipalId and PermissionSetName using a nested defaultdict. Each group contains:
 
@@ -18,13 +18,13 @@ PrincipalId: Principal's identifier.
 PermissionSetName: Name of the Permission Set.
 Creating a new list of optimized assignments: Initializes an empty list to store the optimized assignments.
 
-Attention to the template names being used: template_associacoes.json and optimized_template_associacoes.json. If necessary, adjust the file names.
+Attention to the template names being used: template_assignments.json and optimized_template_assignments.json. If necessary, adjust the file names.
 
 This script is useful for reducing redundancy and optimizing the data structure of permission assignments, facilitating access management and control in multi-account environments.
 """
 
 # Load the JSON file
-with open('templates/assignments/template_associacoes.json', 'r') as file:
+with open('templates/assignments/template_assignments.json', 'r') as file:
     data = json.load(file)
 
 # Grouping for PrincipalId and PermissionSetName
@@ -62,5 +62,5 @@ for principal_id, permissions in grouped.items():
 # Save optimized JSON file
 optimized_data = {"Assignments": optimized_assignments}
 
-with open('templates/assignments/optimized_template_associacoes.json', 'w') as file:
+with open('templates/assignments/optimized_template_assignments.json', 'w') as file:
     json.dump(optimized_data, file, indent=4)

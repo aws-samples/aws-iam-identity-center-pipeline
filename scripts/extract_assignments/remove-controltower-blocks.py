@@ -6,7 +6,7 @@ This script removes blocks from a JSON file of permission assignments that conta
 
 Importing libraries: Imports the json library from Python's standard collection.
 
-Loading the JSON: Loads the JSON file located at templates/assignments/optimized_template_associacoes_updated.json.
+Loading the JSON: Loads the JSON file located at templates/assignments/optimized_template_assignments_updated.json.
 
 Filtering the blocks: Filters the blocks that do not contain "ControlTower" in any value, creating a new list of filtered assignments.
 
@@ -16,7 +16,7 @@ This script is useful for removing specific assignments related to ControlTower,
 """
 
 # Load JSON file
-with open('templates/assignments/optimized_template_associacoes_updated.json', 'r') as file:
+with open('templates/assignments/optimized_template_assignments_updated.json', 'r') as file:
     data = json.load(file)
 
 # Filter the blocks that do not contain "ControlTower" in any value
@@ -28,5 +28,5 @@ filtered_assignments = [
 # Save filtered JSON to a new file
 filtered_data = {"Assignments": filtered_assignments}
 
-with open('templates/assignments/filtered_template_associacoes.json', 'w') as file:
+with open('templates/assignments/filtered_template_assignments.json', 'w') as file:
     json.dump(filtered_data, file, indent=4)

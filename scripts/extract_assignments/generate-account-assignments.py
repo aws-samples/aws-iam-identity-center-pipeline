@@ -233,7 +233,7 @@ def main():
     logging.info(json.dumps(end_template, indent=4))
 
     # Save in json file
-    with open("templates/assignments/template_associacoes.json", "w") as file:
+    with open("templates/assignments/template_assignments.json", "w") as file:
         json.dump(end_template, file, indent=4)
 
 

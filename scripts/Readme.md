@@ -1,18 +1,18 @@
-Execute os scripts na ordem que estão listados, ajustando-os com os path, ids e nomes corretos dos arquivos. Dentro de cada um deles tem uma explicação de como funciona.
+Run the scripts in the order they are listed, adjusting them with the correct paths, IDs, and file names. Inside each of them, there is an explanation of how it works.
 
-1. extracao_assignments/
+1. extract_assignments/
 
-    * Basicamente, ele varre o console em busca das atribuições das contas, consolida os que possuem o mesmo grupo + PS e remove alguns blocos referentes a recursos do Control Tower. Com isso sempre conseguiremos aplicar um sync com o console caso haja necessidade(muito embora a ideia é que isso não seja mais necessário)
+    * Basically, it scans the console for account assignments, consolidates those with the same group + PS, and removes some blocks related to Control Tower resources. With this, we can always apply a sync with the console if necessary (although the idea is that this is no longer needed).
 
     * generate-account-assignments.py
     * optimization-asssignments-json.py
     * remove-controltower-blocks.py
 
-2. extracao_Ous/
+2. extract_Ous/
 
     * list_ou_nested.py
 
-3. extracao_ps/
+3. extract_ps/
 
     * list-ps-unused.py
     * generate-ps.py

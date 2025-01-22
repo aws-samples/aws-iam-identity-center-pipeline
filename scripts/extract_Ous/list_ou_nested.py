@@ -48,5 +48,6 @@ def main():
     nested_ou_ids = list_nested_ou_ids(args.ou_id)
     print(json.dumps(nested_ou_ids, indent=2))
 
+
 if __name__ == "__main__":
     main()
