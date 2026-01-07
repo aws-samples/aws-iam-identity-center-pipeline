@@ -461,8 +461,21 @@ Resources:
                 - Name: RepositoryOutput
               OutputArtifacts:
                 - Name: PermissionSetOutput
-            - Name: Assignments
+            - Name: Groups
               RunOrder: 2
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodebuildGroups
+              InputArtifacts:
+                - Name: RepositoryOutput
+              OutputArtifacts:
+                - Name: GroupsOutput
+            - Name: Assignments
+              RunOrder: 3
               ActionTypeId:
                 Category: Build
                 Owner: AWS
@@ -823,6 +836,156 @@ Resources:
           Value: !Sub "${nameConvention}-permissionset-write"
 
   ## +-------
+  ## | CodeBuild Project (Groups)
+  ## +---------------
+  CodebuildGroups:
+    Type: AWS::CodeBuild::Project
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W32
+            reason: "No relevant artifact produced in projects. S3 bucket is also encrypted with managed key"
+    Properties:
+      Name: !Sub ${nameConvention}-groups
+      ServiceRole: !GetAtt RoleCodebuildGroups.Arn
+      EncryptionKey: !GetAtt KmsKeyS3.Arn
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: "aws/codebuild/amazonlinux2-x86_64-standard:5.0"
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: REGION
+            Value: !Sub ${AWS::Region}
+          - Name: TERRAFORM_STATE
+            Value: !Ref tfStateBucket
+          - Name: MGMT_ACCOUNT
+            Value: !Ref mgmtAccountId
+
+      Artifacts:
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 480
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - echo "[INFO] [INSTALL] Installing dependencies"
+                - wget https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
+                - unzip terraform_*_linux_amd64.zip -d /usr/bin/
+                - chmod +x /usr/bin/terraform
+                - echo "[INFO] [INSTALL] Installing finished"                    
+              finally:
+                - terraform --version
+            build:
+              commands:
+                - echo "[INFO] [BUILD] Starting Groups stage"
+                - cd source/groups/
+                - chmod +x iam-identitycenter-groups.py
+                - echo "[INFO] [BUILD] Creating Identity Center Groups"
+                - python3 iam-identitycenter-groups.py
+                - terraform init -backend-config="bucket=$TERRAFORM_STATE" -backend-config="key=groups.tfstate" -backend-config="region=$REGION"
+                - terraform plan
+                - terraform apply -auto-approve
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-groups"
+
+  ## +-------
+  ## | IAM Service Role (Groups)
+  ## +---------------
+  RoleCodebuildGroups:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "Requires * in Resource to interact with all Identity Center resources"
+          - id: W28
+            reason: "Fixed name required to future references"
+    Properties:
+      RoleName: !Sub ${nameConvention}-groups-write
+      Description: "Service role for CodeBuild"
+      Policies:
+        - PolicyName: !Sub ${nameConvention}-groups-write
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: CodeBuildAccess
+                Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${nameConvention}-*"
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${nameConvention}*:*"
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${nameConvention}*"
+              - Sid: Buckets
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetBucketPolicy
+                  - s3:GetObject
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${artifactsBucket}*/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${tfStateBucket}*/*"
+              - Sid: CodeBuild
+                Effect: Allow
+                Action:
+                  - "codebuild:CreateReportGroup"
+                  - "codebuild:CreateReport"
+                  - "codebuild:UpdateReport"
+                  - "codebuild:BatchPutTestCases"
+                  - "codebuild:BatchPutCodeCoverages"
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${nameConvention}*"
+              - Sid: SpecificPermissions
+                Effect: Allow
+                Action:
+                  - "sso:ListInstances"
+                  - "identitystore:ListGroups"
+                  - "identitystore:GetGroupId"
+                  - "identitystore:DescribeGroup"
+                  - "identitystore:CreateGroup"
+                  - "identitystore:DeleteGroup"
+                  - "identitystore:UpdateGroup"
+                Resource:
+                  - "*"
+              - Sid: KMSPermission
+                Effect: Allow
+                Action:
+                  - "kms:Encrypt"
+                  - "kms:Decrypt"
+                  - "kms:ReEncrypt*"
+                  - "kms:GenerateDataKey*"
+                  - "kms:DescribeKey"
+                Resource:
+                  - !GetAtt KmsKeyS3.Arn
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "codebuild.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-groups-write"
+
+  ## +-------
   ## | CodeBuild Project (Assignments)
   ## +---------------
   CodebuildAssignments:
@@ -1049,6 +1212,18 @@ Resources:
             Resource:
               - !Sub arn:${AWS::Partition}:s3:::${tfStateBucket}/*
               - !Sub arn:${AWS::Partition}:s3:::${tfStateBucket}
+          - Sid: AllowCodeBuildGroups
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt RoleCodebuildGroups.Arn
+            Action:
+              - s3:Get*
+              - s3:Put*
+              - s3:List*
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::${tfStateBucket}/*
+              - !Sub arn:${AWS::Partition}:s3:::${tfStateBucket}
+
 
   ## +-------
   ## | S3 Bucket Artifact
