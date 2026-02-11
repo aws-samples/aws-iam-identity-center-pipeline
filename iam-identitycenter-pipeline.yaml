@@ -36,6 +36,15 @@ Metadata:
           default: "SNS Notifications"
         Parameters:
           - codeBuildErrorEmailAddress
+          - codeCommitEmailAddress
+      - Label:
+          default: "Repository settings"
+        Parameters:
+          - useCodeCommitRepo
+          - branchName
+          - providerType
+          - fullRepositoryId
+
 
 ## +-------
 ## | Parameters
@@ -59,20 +68,39 @@ Parameters:
     Description: "Specify the retention time in days for logs within CloudWatch Log Groups"
     Type: String
     Default: 365
-  providerType:
-    Description: "Repository provider type. Ex: Bitbucket, GitHub, GitHubEnterpriseServer, GitLab, GitLabSelfManage"
-    Type: String
-    Default: "GitHub"
-  fullRepositoryId:
-    Description: "Full repository ID in the format user/repository_name"
-    Type: String
-    Default: user/iam-idc-repository 
   codeBuildErrorEmailAddress:
     Description: "Optional: If you wish to receive a notification upon a CodeBuild error, enter an email address and accept the topic subscription. (e.g. user@emaildomain.com)"
     Type: String
     Default: user@example.com
-
-
+  codeCommitEmailAddress:
+    Description: "Optional: If you wish to receive a notification upon CodeCommit State Changes and Pull Requests, enter an email address and accept the topic subscription. (e.g. user@emaildomain.com). Leave it blank if using CodeConnections"
+    Type: String
+  useCodeCommitRepo:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: "Define CodeCommit as default repository. Set to true to use CodeCommit as source, false to use CodeConnections"
+  providerType:
+    Description: "Repository provider type, ex: Bitbucket, GitHub, GitHubEnterpriseServer, GitLab, GitLabSelfManagef. N/A if using CodeCommit"
+    Type: String
+    Default: "GitHub"
+    AllowedValues:
+      - "Bitbucket"
+      - "GitHub"
+      - "GitHubEnterpriseServer"
+      - "GitLab"
+      - "GitLabSelfManaged"
+      - "N/A"
+  fullRepositoryId:
+    Description: "Full repository ID in the format user/repository_name. N/A if using CodeCommit"
+    Type: String
+    Default: user/iam-idc-repository
+  branchName:
+    Description: "The name of the Git branch that will be used for access management."
+    Type: String
+    Default: main
 
 ## +-------
 ## | Conditions
@@ -83,11 +111,26 @@ Conditions:
       - Fn::Equals:
           - ""
           - Ref: codeBuildErrorEmailAddress
+  codecommitEmailProvided:
+    Fn::Not:
+      - Fn::Equals:
+          - ""
+          - Ref: codeCommitEmailAddress
+  useCodeCommitSource:
+    Fn::Equals:
+      - Ref: useCodeCommitRepo
+      - "true"
+  useCodeConnectionsSource:
+    Fn::Equals:
+      - Ref: useCodeCommitRepo
+      - "false"
 
 Resources:
   ## +-------
-  ## | SNS Topics (CodeBuild Error)
+  ## | SNS Topics (CodeBuild Error and CodeCommit Notifications)
   ## +---------------
+
+  #CodeBuild Error notification
   CodeBuildSNSTopic:
     Type: AWS::SNS::Topic
     Condition: codeBuildErrorEmailProvided
@@ -127,7 +170,45 @@ Resources:
       Topics:
         - !Ref CodeBuildSNSTopic
 
+  #CodeCommit Changes notification
+  CodeCommitSNSTopic:
+    Type: AWS::SNS::Topic
+    Condition: codecommitEmailProvided
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W47
+            reason: "SNS Topic should specify KmsMasterKeyId property"
+    Properties:
+      TopicName: !Sub "${nameConvention}-CodeCommitSNSTopic"
 
+  CodeCommitSNSSubscription:
+    Condition: codecommitEmailProvided
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: !Ref codeCommitEmailAddress
+      TopicArn: !Ref CodeCommitSNSTopic
+
+  CodeCommitSNSTopicPolicy:
+    Condition: codecommitEmailProvided
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - sns:Publish
+            Resource:
+              Ref: CodeCommitSNSTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Sub "${AWS::AccountId}"
+      Topics:
+        - !Ref CodeCommitSNSTopic
 
   ## +-------
   ## | CloudWatch Log Groups (Lambda and CodeBuild)
@@ -235,7 +316,7 @@ Resources:
         Statement:
           - Sid: SNSPublish
             Effect: Allow
-            Action: sns:Publish
+            Action: "sns:Publish"
             Resource: !Ref CodeBuildSNSTopic
           - Sid: CodebuildLogs
             Effect: Allow
@@ -403,6 +484,103 @@ Resources:
       LogGroupName: !Ref PipelineLogGroupPermissionSet
 
   ## +-------
+  ## | EventBridge Notifications for CodeCommit
+  ## +---------------
+  CodeCommitStateChangeEventRule:
+    Condition: codecommitEmailProvided
+    Type: "AWS::Events::Rule"
+    Properties:
+      Description: CodeCommit State Change Events
+      Name: !Sub "${nameConvention}-CCChangeNotify"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
+      State: ENABLED
+      Targets:
+        - Arn: !Ref CodeCommitSNSTopic
+          Id: CodeCommitSNSTopic
+          InputTransformer:
+            InputPathsMap:
+              "source": "$.source"
+              "event": "$.detail.event"
+              "time": "$.time"
+              "resource_arn": "$.resources"
+              "resource_repositoryname": "$.detail.repositoryName"
+              "resource_type": "$.detail.referenceType"
+              "resource_branchName": "$.detail.referenceName"
+              "callerUserArn": "$.detail.callerUserArn"
+            InputTemplate: |
+              "CodeCommit had a repository state change"
+              "Event Source: <source>"
+              "Event Name: <event>"
+              "Event Time: <time>"
+              "Repository Name: <resource_repositoryname>"
+              "Repository ARN: <resource_arn>"
+              "Repository Type: <resource_type>"
+              "Repository Branch: <resource_branchName>"
+              "User Identity: <callerUserArn>"
+          RetryPolicy:
+            MaximumRetryAttempts: 4
+            MaximumEventAgeInSeconds: 400
+
+  CodeCommitPullRequestStateChangeEventRule:
+    Condition: codecommitEmailProvided
+    Type: "AWS::Events::Rule"
+    Properties:
+      Description: CodeCommit Pull Request Change Events
+      Name: !Sub "${nameConvention}-CCPullReqNotify"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Pull Request State Change
+        resources:
+          - !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
+      State: ENABLED
+      Targets:
+        - Arn: !Ref CodeCommitSNSTopic
+          Id: CodeCommitSNSTopic
+          InputTransformer:
+            InputPathsMap:
+              "source": "$.source"
+              "time": "$.time"
+              "approvalStatus": "$.detail.approvalStatus"
+              "author": "$.detail.author"
+              "callerUserArn": "$.detail.callerUserArn"
+              "description": "$.detail.description"
+              "destinationReference": "$.detail.destinationReference"
+              "event": "$.detail.event"
+              "isMerged": "$.detail.isMerged"
+              "notificationBody": "$.detail.notificationBody"
+              "pullRequestStatus": "$.detail.pullRequestStatus"
+              "repositoryNames": "$.detail.repositoryNames"
+              "sourceReference": "$.detail.sourceReference"
+              "title": "$.detail.title"
+            InputTemplate: |
+              "CodeCommit had a Pull Request State Change"
+              "Event Source: <source>"
+              "Event Name: <event>"
+              "Event Time: <time>"
+              "Title: <title>"
+              "Approval Status: <approvalStatus>"
+              "Author: <author>"
+              "PR Modification User: <callerUserArn>"
+              "Description: <description>"
+              "Repository Name: <repositoryNames>"
+              "Source Reference: <sourceReference>"
+              "Destination Reference: <destinationReference>"
+              "PR is Merged: <isMerged>"
+              "notificationBody: <notificationBody>"
+              "Pull Request Status: <pullRequestStatus>"
+          RetryPolicy:
+            MaximumRetryAttempts: 4
+            MaximumEventAgeInSeconds: 400
+
+  ## +-------
   ## | CodePipeline
   ## +---------------
   Pipeline:
@@ -417,20 +595,35 @@ Resources:
       Stages:
         - Name: Source
           Actions:
-            - Name: Source
-              ActionTypeId:
-                Category: Source
-                Owner: AWS
-                Version: "1"
-                Provider: CodeStarSourceConnection
-              Configuration:
-                FullRepositoryId: !Ref fullRepositoryId
-                BranchName: main
-                ConnectionArn: !GetAtt IdentityCenterConnection.ConnectionArn
-                OutputArtifactFormat: CODE_ZIP
-              OutputArtifacts:
+            - !If
+              - useCodeCommitSource
+              - Name: Source
+                ActionTypeId:
+                  Category: Source
+                  Owner: AWS
+                  Version: "1"
+                  Provider: CodeCommit
+                Configuration:
+                  RepositoryName: !Sub "${nameConvention}-repository"
+                  BranchName: !Ref branchName
+                  PollForSourceChanges: false
+                OutputArtifacts:
+                  - Name: RepositoryOutput
+                RunOrder: 1
+              - Name: Source
+                ActionTypeId:
+                  Category: Source
+                  Owner: AWS
+                  Version: "1"
+                  Provider: CodeStarSourceConnection
+                Configuration:
+                  FullRepositoryId: !Ref fullRepositoryId
+                  BranchName: !Ref branchName
+                  ConnectionArn: !GetAtt IdentityCenterConnection.ConnectionArn
+                  OutputArtifactFormat: CODE_ZIP
+                OutputArtifacts:
                 - Name: RepositoryOutput
-              RunOrder: 1
+                RunOrder: 1
         - Name: TemplateValidation
           Actions:
             - Name: TemplateValidation
@@ -510,33 +703,52 @@ Resources:
               - Sid: CodeBuildAccess
                 Effect: Allow
                 Action:
-                  - codebuild:BatchGetBuilds
-                  - codebuild:StartBuild
+                  - "codebuild:BatchGetBuilds"
+                  - "codebuild:StartBuild"
                 Resource:
                   - !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${nameConvention}-*"
               - Sid: S3AllAccess
                 Effect: Allow
                 Action:
-                  - s3:ListAllMyBuckets
+                  - "s3:ListAllMyBuckets"
                 Resource:
                   - "*"
               - Sid: BucketPermissions
                 Effect: Allow
                 Action:
-                  - s3:PutObject
-                  - s3:GetBucketPolicy
-                  - s3:GetObject
-                  - s3:GetBucketAcl
-                  - s3:GetBucketLocation
+                  - "s3:PutObject"
+                  - "s3:GetBucketPolicy"
+                  - "s3:GetObject"
+                  - "s3:GetBucketAcl"
+                  - "s3:GetBucketLocation"
                 Resource:
                   - !Sub "arn:${AWS::Partition}:s3:::${artifactsBucket}/*"
                   - !Sub "arn:${AWS::Partition}:s3:::${artifactsBucket}*"
-              - Sid: CodeConnection
-                Effect: Allow
-                Action:
-                  - codestar-connections:UseConnection
-                Resource:
-                  - !GetAtt  IdentityCenterConnection.ConnectionArn
+              - !If
+                - useCodeCommitSource
+                - Sid: CodeComitPermissions
+                  Effect: Allow
+                  Action:
+                    - "codecommit:ListBranches"
+                    - "codecommit:ListRepositories"
+                    - "codecommit:GetCommit"
+                    - "codecommit:GetBranch"
+                    - "codecommit:GetUploadArchiveStatus"
+                    - "codecommit:GitPull"
+                    - "codecommit:UploadArchive"
+                    - "codecommit:CancelUploadArchive"
+                  Resource:
+                    - !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
+                - !Ref AWS::NoValue
+              - !If
+                - useCodeCommitSource
+                - !Ref AWS::NoValue
+                - Sid: CodeConnection
+                  Effect: Allow
+                  Action:
+                    - "codestar-connections:UseConnection"
+                  Resource:
+                    - !GetAtt  IdentityCenterConnection.ConnectionArn
 
       Tags: 
         - Key: "Name"
@@ -546,10 +758,24 @@ Resources:
   ## | Repository (Identity Center Management)
   ## +--------------
 
+  #If using AWS CodeCommit as repo
+  IdentityCenterRepository:
+    Condition: useCodeCommitSource
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryDescription: "Repository to control AWS Identity Center Permission Sets and assignments"
+      RepositoryName: !Sub "${nameConvention}-repository"
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-repository"
+
+
+  #If using CodeConnections for 3rd party repository
   IdentityCenterConnection:
     Type: AWS::CodeConnections::Connection
+    Condition: useCodeConnectionsSource
     Properties:
-      ConnectionName: !Sub "${nameConvention}-repository"
+      ConnectionName: !Sub "${nameConvention}-connection"
       ProviderType: !Ref providerType
   
 
@@ -615,8 +841,8 @@ Resources:
               - Sid: CodeBuildAccess
                 Effect: Allow
                 Action:
-                  - codebuild:BatchGetBuilds
-                  - codebuild:StartBuild
+                  - "codebuild:BatchGetBuilds"
+                  - "codebuild:StartBuild"
                 Resource:
                   - !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${nameConvention}-*"
               - Sid: Logs
@@ -650,8 +876,8 @@ Resources:
               - Sid: SpecificPermissions
                 Effect: Allow
                 Action:
-                  - access-analyzer:ValidatePolicy
-                  - iam:GetPolicy
+                  - "access-analyzer:ValidatePolicy"
+                  - "iam:GetPolicy"
                 Resource:
                   - "*"
               - Sid: KMSPermission
@@ -664,6 +890,31 @@ Resources:
                   - "kms:DescribeKey"
                 Resource:
                   - !GetAtt KmsKeyS3.Arn
+              - !If
+                - useCodeCommitSource
+                - Sid: CodeComitPermissions
+                  Effect: Allow
+                  Action:
+                    - "codecommit:ListBranches"
+                    - "codecommit:ListRepositories"
+                    - "codecommit:GetCommit"
+                    - "codecommit:GetBranch"
+                    - "codecommit:GetUploadArchiveStatus"
+                    - "codecommit:GitPull"
+                    - "codecommit:UploadArchive"
+                    - "codecommit:CancelUploadArchive"
+                  Resource:
+                    - !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
+                - !Ref AWS::NoValue
+              - !If
+                - useCodeCommitSource
+                - !Ref AWS::NoValue
+                - Sid: CodeConnection
+                  Effect: Allow
+                  Action:
+                    - "codestar-connections:UseConnection"
+                  Resource:
+                    - !GetAtt  IdentityCenterConnection.ConnectionArn
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -738,8 +989,8 @@ Resources:
               - Sid: CodeBuildAccess
                 Effect: Allow
                 Action:
-                  - codebuild:BatchGetBuilds
-                  - codebuild:StartBuild
+                  - "codebuild:BatchGetBuilds"
+                  - "codebuild:StartBuild"
                 Resource:
                   - !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${nameConvention}-*"
               - Sid: Logs
@@ -773,31 +1024,31 @@ Resources:
               - Sid: SpecificPermissions
                 Effect: Allow
                 Action:
-                  - sso:ProvisionPermissionSet
-                  - sso:ListPermissionSets
-                  - sso:DeletePermissionsPolicy
-                  - sso:PutPermissionsPolicy
-                  - sso:PutInlinePolicyToPermissionSet
-                  - sso:DeleteInlinePolicyToPermissionSet
-                  - sso:DescribePermissionSet
-                  - sso:GetPermissionSet
-                  - sso:AttachManagedPolicyToPermissionSet
-                  - sso:CreatePermissionSet
-                  - sso:UpdatePermissionSet
-                  - sso:ListTagsForResource
-                  - sso:ListManagedPoliciesInPermissionSet
-                  - sso:DescribeAccountAssignmentDeletionStatus
-                  - sso:DeletePermissionSet
-                  - sso:TagResource
-                  - sso:DetachManagedPolicyFromPermissionSet
-                  - sso:DeleteInlinePolicyFromPermissionSet
-                  - sso:AttachCustomerManagedPolicyReferenceToPermissionSet
-                  - sso:DeletePermissionsBoundaryFromPermissionSet
-                  - sso:ListCustomerManagedPolicyReferencesInPermissionSet
-                  - sso:PutPermissionsBoundaryToPermissionSet
-                  - sso:DetachCustomerManagedPolicyReferenceFromPermissionSet
-                  - sso:GetPermissionsBoundaryForPermissionSet
-                  - sso:ListInstances
+                  - "sso:ProvisionPermissionSet"
+                  - "sso:ListPermissionSets"
+                  - "sso:DeletePermissionsPolicy"
+                  - "sso:PutPermissionsPolicy"
+                  - "sso:PutInlinePolicyToPermissionSet"
+                  - "sso:DeleteInlinePolicyToPermissionSet"
+                  - "sso:DescribePermissionSet"
+                  - "sso:GetPermissionSet"
+                  - "sso:AttachManagedPolicyToPermissionSet"
+                  - "sso:CreatePermissionSet"
+                  - "sso:UpdatePermissionSet"
+                  - "sso:ListTagsForResource"
+                  - "sso:ListManagedPoliciesInPermissionSet"
+                  - "sso:DescribeAccountAssignmentDeletionStatus"
+                  - "sso:DeletePermissionSet"
+                  - "sso:TagResource"
+                  - "sso:DetachManagedPolicyFromPermissionSet"
+                  - "sso:DeleteInlinePolicyFromPermissionSet"
+                  - "sso:AttachCustomerManagedPolicyReferenceToPermissionSet"
+                  - "sso:DeletePermissionsBoundaryFromPermissionSet"
+                  - "sso:ListCustomerManagedPolicyReferencesInPermissionSet"
+                  - "sso:PutPermissionsBoundaryToPermissionSet"
+                  - "sso:DetachCustomerManagedPolicyReferenceFromPermissionSet"
+                  - "sso:GetPermissionsBoundaryForPermissionSet"
+                  - "sso:ListInstances"
                 Resource:
                   - "*"
               - Sid: KMSPermission
@@ -810,6 +1061,31 @@ Resources:
                   - "kms:DescribeKey"
                 Resource:
                   - !GetAtt KmsKeyS3.Arn
+              - !If
+                - useCodeCommitSource
+                - Sid: CodeComitPermissions
+                  Effect: Allow
+                  Action:
+                    - "codecommit:ListBranches"
+                    - "codecommit:ListRepositories"
+                    - "codecommit:GetCommit"
+                    - "codecommit:GetBranch"
+                    - "codecommit:GetUploadArchiveStatus"
+                    - "codecommit:GitPull"
+                    - "codecommit:UploadArchive"
+                    - "codecommit:CancelUploadArchive"
+                  Resource:
+                    - !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
+                - !Ref AWS::NoValue
+              - !If
+                - useCodeCommitSource
+                - !Ref AWS::NoValue
+                - Sid: CodeConnection
+                  Effect: Allow
+                  Action:
+                    - "codestar-connections:UseConnection"
+                  Resource:
+                    - !GetAtt  IdentityCenterConnection.ConnectionArn
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -901,8 +1177,8 @@ Resources:
               - Sid: CodeBuildAccess
                 Effect: Allow
                 Action:
-                  - codebuild:BatchGetBuilds
-                  - codebuild:StartBuild
+                  - "codebuild:BatchGetBuilds"
+                  - "codebuild:StartBuild"
                 Resource:
                   - !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${nameConvention}-*"
               - Sid: Logs
@@ -917,13 +1193,13 @@ Resources:
               - Sid: Buckets
                 Effect: Allow
                 Action:
-                  - s3:PutObject
-                  - s3:GetBucketPolicy
-                  - s3:GetObject
-                  - s3:GetBucketAcl
-                  - s3:GetBucketLocation
-                  - s3:ListBucket
-                  - s3:DeleteObject
+                  - "s3:PutObject"
+                  - "s3:GetBucketPolicy"
+                  - "s3:GetObject"
+                  - "s3:GetBucketAcl"
+                  - "s3:GetBucketLocation"
+                  - "s3:ListBucket"
+                  - "s3:DeleteObject"
                 Resource:
                   - !Sub "arn:${AWS::Partition}:s3:::${artifactsBucket}*/*"
                   - !Sub "arn:${AWS::Partition}:s3:::${tfStateBucket}*/*"
@@ -975,6 +1251,31 @@ Resources:
                   - "kms:DescribeKey"
                 Resource:
                   - !GetAtt KmsKeyS3.Arn
+              - !If
+                - useCodeCommitSource
+                - Sid: CodeComitPermissions
+                  Effect: Allow
+                  Action:
+                    - "codecommit:ListBranches"
+                    - "codecommit:ListRepositories"
+                    - "codecommit:GetCommit"
+                    - "codecommit:GetBranch"
+                    - "codecommit:GetUploadArchiveStatus"
+                    - "codecommit:GitPull"
+                    - "codecommit:UploadArchive"
+                    - "codecommit:CancelUploadArchive"
+                  Resource:
+                    - !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
+                - !Ref AWS::NoValue
+              - !If
+                - useCodeCommitSource
+                - !Ref AWS::NoValue
+                - Sid: CodeConnection
+                  Effect: Allow
+                  Action:
+                    - "codestar-connections:UseConnection"
+                  Resource:
+                    - !GetAtt  IdentityCenterConnection.ConnectionArn
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -1168,6 +1469,72 @@ Resources:
         - Key: "Name"
           Value: !Sub "${nameConvention}-s3"
 
+  ## +-------
+  ## | EventBridge (Trigger - Code Changes)
+  ## +---------------
+
+  #Event definition
+  eventPipelineCodeChangeTrigger:
+    Condition: useCodeCommitSource  
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ${nameConvention}-codechange-trigger
+      Description: "Rule to trigger the CodePipeline based on code changes"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - "CodeCommit Repository State Change"
+        resources:
+          - !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - !Ref branchName
+      Targets:
+        - Arn: !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${nameConvention}-pipeline
+          RoleArn: !GetAtt rolePipelineCodeChangeTrigger.Arn
+          Id: codepipeline-CodeChangeTrigger
+
+  ## +-------
+  ## | IAM Role (EventBridge Trigger - Code Change)
+  ## +---------------
+
+  rolePipelineCodeChangeTrigger:
+    Condition: useCodeCommitSource  
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${nameConvention}-eventbridge-codechange-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+
+  policyPipelineCodeChangeTrigger:
+    Condition: useCodeCommitSource  
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${nameConvention}-eventbridge-codechange-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - "codepipeline:StartPipelineExecution"
+            Resource: !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${nameConvention}-pipeline
+      Roles: 
+        - !Ref rolePipelineCodeChangeTrigger
+
+  ## +-------
+  ## | IAM Role (Lambda Trigger - Move Account)
+  ## +---------------
   LambdaTriggerRole:
     Type: "AWS::IAM::Role"
     Metadata:
@@ -1187,6 +1554,8 @@ Resources:
             Action:
               - "sts:AssumeRole"
       Path: "/"
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
       Policies:
         - PolicyName: !Sub ${nameConvention}-pipelinetrigger
           PolicyDocument:
@@ -1195,9 +1564,28 @@ Resources:
               - Sid: CodePipelinePerm
                 Effect: Allow
                 Action:
-                  - codepipeline:StartPipelineExecution
+                  - "codepipeline:StartPipelineExecution"
                 Resource:
                   - !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${nameConvention}-pipeline
+              - !If
+                - useCodeCommitSource
+                - Sid: CodeComitPerm
+                  Effect: Allow
+                  Action:
+                    - "codecommit:List*"
+                    - "codecommit:Get*"
+                  Resource:
+                    - !Sub "arn:${AWS::Partition}:codecommit:${AWS::Region}:${AWS::AccountId}:${nameConvention}-repository"
+                - !Ref AWS::NoValue
+              - !If
+                - useCodeCommitSource
+                - !Ref AWS::NoValue
+                - Sid: CodeConnection
+                  Effect: Allow
+                  Action:
+                    - "codestar-connections:UseConnection"
+                  Resource:
+                    - !GetAtt  IdentityCenterConnection.ConnectionArn
       Tags: 
         - Key: "Name"
-          Value: !Sub "${nameConvention}-pipelinetrigger-write"          
+          Value: !Sub "${nameConvention}-pipelinetrigger-write"
