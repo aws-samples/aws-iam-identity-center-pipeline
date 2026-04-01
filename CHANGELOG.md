@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [2.1.0] - 2026-04-01
+### Added
+- Add export scripts for extracting existing IAM Identity Center permission sets and account assignments into pipeline-compatible JSON format, with support for filtering by account, permission set, active/inactive principals, and AWS-managed vs custom permission sets
+ 
+### Changed
+- N/A
+
+### Fixed
+- N/A
+
 ## [2.0.0] - 2025-01-03
 Previous versions of the pipeline assign permissions in Organization Units (OUs) by using its name. However, AWS Organization allows multiple OUs with the same name. To address that, I have changed how you specify Targets in the assignment template file. Now you need to specify using the format {{ou_name}}:{{ou_id}} or {{account_name}}:{{acount_id}} to ensure you are assigning permission in the correct OU. Using “Root:r-rootid” as a target to assign permission in all AWS accounts is valid.
 
