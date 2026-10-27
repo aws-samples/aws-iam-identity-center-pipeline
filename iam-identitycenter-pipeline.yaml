@@ -968,7 +968,7 @@ Resources:
                   - "kms:GenerateDataKey*"
                   - "kms:DescribeKey"
                 Resource:
-                  - !GetAtt KmsKeyS3.Arn
+                  - "*"
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
