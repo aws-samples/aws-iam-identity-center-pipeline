@@ -20,6 +20,8 @@ Description: "Create a CI/CD pipeline for AWS Identity Center permission sets an
 ## | Metadata
 ## +--------------
 Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
@@ -28,6 +30,13 @@ Metadata:
           - nameConvention
           - s3NameConvention
           - mgmtAccountId
+      - Label:
+          default: "Source Repository"
+        Parameters:
+          - providerType
+          - fullRepositoryId
+          - s3BucketCodeBucket
+          - s3BucketCodeKey
       - Label:
           default: "CloudWatch Logs"
         Parameters:
@@ -60,13 +69,28 @@ Parameters:
     Type: String
     Default: 365
   providerType:
-    Description: "Repository provider type. Ex: Bitbucket, GitHub, GitHubEnterpriseServer, GitLab, GitLabSelfManage"
+    Description: "Repository provider. CodeCommit creates an AWS CodeCommit repository in this account. The other values use an AWS CodeConnections connection to an external repository"
     Type: String
     Default: "GitHub"
+    AllowedValues:
+      - CodeCommit
+      - Bitbucket
+      - GitHub
+      - GitHubEnterpriseServer
+      - GitLab
+      - GitLabSelfManaged
   fullRepositoryId:
-    Description: "Full repository ID in the format user/repository_name"
+    Description: "External providers only (ignored for CodeCommit): full repository ID in the format user/repository_name"
     Type: String
     Default: user/iam-idc-repository 
+  s3BucketCodeBucket:
+    Description: "CodeCommit only (optional): S3 bucket with a .zip of this solution used to seed the main branch of the new repository. Leave empty to create an empty repository and push the code to its main branch later"
+    Type: String
+    Default: ""
+  s3BucketCodeKey:
+    Description: "CodeCommit only (optional): key of the .zip file in the S3 bucket above"
+    Type: String
+    Default: "iam-identitycenter.zip"
   codeBuildErrorEmailAddress:
     Description: "Optional: If you wish to receive a notification upon a CodeBuild error, enter an email address and accept the topic subscription. (e.g. user@emaildomain.com)"
     Type: String
@@ -83,6 +107,20 @@ Conditions:
       - Fn::Equals:
           - ""
           - Ref: codeBuildErrorEmailAddress
+  useCodeCommit:
+    Fn::Equals:
+      - "CodeCommit"
+      - Ref: providerType
+  useExternalRepository:
+    Fn::Not:
+      - Condition: useCodeCommit
+  codeCommitInitialCodeProvided:
+    Fn::And:
+      - Condition: useCodeCommit
+      - Fn::Not:
+          - Fn::Equals:
+              - ""
+              - Ref: s3BucketCodeBucket
 
 Resources:
   ## +-------
@@ -415,6 +453,8 @@ Resources:
         Type: S3
         Location: !Ref artifactsBucket
       Stages:
+        # CodeCommit: change detection comes from the triggerPipelineCodeChange EventBridge rule
+        # External providers: CodeConnections detects pushes to the branch by default
         - Name: Source
           Actions:
             - Name: Source
@@ -422,12 +462,20 @@ Resources:
                 Category: Source
                 Owner: AWS
                 Version: "1"
-                Provider: CodeStarSourceConnection
-              Configuration:
-                FullRepositoryId: !Ref fullRepositoryId
-                BranchName: main
-                ConnectionArn: !GetAtt IdentityCenterConnection.ConnectionArn
-                OutputArtifactFormat: CODE_ZIP
+                Provider: !If
+                  - useCodeCommit
+                  - CodeCommit
+                  - CodeStarSourceConnection
+              Configuration: !If
+                - useCodeCommit
+                - RepositoryName: !GetAtt IdentityCenterRepository.Name
+                  BranchName: main
+                  PollForSourceChanges: false
+                  OutputArtifactFormat: CODE_ZIP
+                - FullRepositoryId: !Ref fullRepositoryId
+                  BranchName: main
+                  ConnectionArn: !GetAtt IdentityCenterConnection.ConnectionArn
+                  OutputArtifactFormat: CODE_ZIP
               OutputArtifacts:
                 - Name: RepositoryOutput
               RunOrder: 1
@@ -531,12 +579,25 @@ Resources:
                 Resource:
                   - !Sub "arn:${AWS::Partition}:s3:::${artifactsBucket}/*"
                   - !Sub "arn:${AWS::Partition}:s3:::${artifactsBucket}*"
-              - Sid: CodeConnection
-                Effect: Allow
-                Action:
-                  - codestar-connections:UseConnection
-                Resource:
-                  - !GetAtt  IdentityCenterConnection.ConnectionArn
+              - !If
+                - useCodeCommit
+                - Sid: CodeCommitAccess
+                  Effect: Allow
+                  Action:
+                    - codecommit:CancelUploadArchive
+                    - codecommit:GetBranch
+                    - codecommit:GetCommit
+                    - codecommit:GetRepository
+                    - codecommit:GetUploadArchiveStatus
+                    - codecommit:UploadArchive
+                  Resource:
+                    - !GetAtt IdentityCenterRepository.Arn
+                - Sid: CodeConnection
+                  Effect: Allow
+                  Action:
+                    - codestar-connections:UseConnection
+                  Resource:
+                    - !GetAtt IdentityCenterConnection.ConnectionArn
 
       Tags: 
         - Key: "Name"
@@ -544,14 +605,112 @@ Resources:
 
   ## +-------
   ## | Repository (Identity Center Management)
+  ## | providerType CodeCommit: CodeCommit repository in this account
+  ## | Other providerType values: CodeConnections connection to the external repository
   ## +--------------
+
+  # Retained on stack deletion/replacement: the repository is the source of truth for
+  # permission sets and assignments. Code from S3 is only imported when the repository is created
+  IdentityCenterRepository:
+    Type: AWS::CodeCommit::Repository
+    Condition: useCodeCommit
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub "${nameConvention}-repository"
+      RepositoryDescription: "Repository to control AWS IAM Identity Center permission sets and assignments"
+      Code: !If
+        - codeCommitInitialCodeProvided
+        - BranchName: main
+          S3:
+            Bucket: !Ref s3BucketCodeBucket
+            Key: !Ref s3BucketCodeKey
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-repository"
 
   IdentityCenterConnection:
     Type: AWS::CodeConnections::Connection
+    Condition: useExternalRepository
     Properties:
       ConnectionName: !Sub "${nameConvention}-repository"
       ProviderType: !Ref providerType
-  
+
+  ## +-------
+  ## | EventBridge (CodeCommit Trigger)
+  ## | Pipeline triggers only support CodeConnections, so pushes to the CodeCommit main branch
+  ## | start the pipeline through this rule. Keep referenceName equal to the Source action BranchName
+  ## +---------------
+  triggerPipelineCodeChange:
+    Type: AWS::Events::Rule
+    Condition: useCodeCommit
+    Properties:
+      Name: !Sub "${nameConvention}-codechange-trigger"
+      Description: "Rule to trigger the CodePipeline based on changes in the main branch of the CodeCommit repository"
+      EventPattern:
+        source:
+          - "aws.codecommit"
+        detail-type:
+          - "CodeCommit Repository State Change"
+        resources:
+          - !GetAtt IdentityCenterRepository.Arn
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - main
+      State: ENABLED
+      Targets:
+        - Arn: !Sub "arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}"
+          RoleArn: !GetAtt triggerPipelineCodeChangeRole.Arn
+          Id: "CodePipelineTrigger"
+
+  ## +-------
+  ## | IAM Role (CodeCommit Trigger)
+  ## +---------------
+  triggerPipelineCodeChangeRole:
+    Type: AWS::IAM::Role
+    Condition: useCodeCommit
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "Fixed name required to future references"
+    Properties:
+      RoleName: !Sub ${nameConvention}-codecommittrigger-write
+      Description: "Role that EventBridge uses to start the pipeline on CodeCommit changes"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Sub "${AWS::AccountId}"
+              ArnLike:
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${nameConvention}-codechange-trigger"
+      Path: "/"
+      Policies:
+        - PolicyName: !Sub ${nameConvention}-codecommittrigger-write
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: CodePipelinePerm
+                Effect: Allow
+                Action:
+                  - codepipeline:StartPipelineExecution
+                Resource:
+                  - !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${nameConvention}-pipeline
+      Tags:
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-codecommittrigger-write"
 
   ## +-------
   ## | CodeBuild Project (Template Validation)
@@ -809,7 +968,7 @@ Resources:
                   - "kms:GenerateDataKey*"
                   - "kms:DescribeKey"
                 Resource:
-                  - !GetAtt KmsKeyS3.Arn
+                  - "*"
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
