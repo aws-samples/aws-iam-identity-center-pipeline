@@ -30,6 +30,7 @@ Metadata:
           - nameConvention
           - s3NameConvention
           - mgmtAccountId
+          - mgmtNameConvention
       - Label:
           default: "Source Repository"
         Parameters:
@@ -64,6 +65,10 @@ Parameters:
     Description: "Account ID of the management account. (e.g. 123456789123)"
     Type: String
     Default: ""
+  mgmtNameConvention:
+    Description: "Prefix (nameConvention) used when deploying iam-identitycenter-organization.yaml in the management account. Only the role <prefix>-assumerole-write of that account is allowed to start this pipeline"
+    Type: String
+    Default: "iam-identitycenter"
   cwLGRetentionInDays:
     Description: "Specify the retention time in days for logs within CloudWatch Log Groups"
     Type: String
@@ -124,18 +129,82 @@ Conditions:
 
 Resources:
   ## +-------
+  ## | KMS Key (CodeBuild Error SNS Topic)
+  ## | Customer managed key used to encrypt the messages published to CodeBuildSNSTopic.
+  ## | Usage is delegated to IAM principals of this account through SNS (same model as the
+  ## | AWS managed key aws/sns). The publisher (PipelineToSNSRole) gets kms:GenerateDataKey*
+  ## | and kms:Decrypt in PipelineToSNSRolePolicy. If an AWS service (e.g. EventBridge) ever
+  ## | publishes to the topic, add its service principal to this key policy as described in
+  ## | https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html
+  ## +---------------
+  KmsKeySNS:
+    Type: AWS::KMS::Key
+    Condition: codeBuildErrorEmailProvided
+    Properties:
+      Description: KMS key for the CodeBuild error notifications SNS topic
+      Enabled: true
+      EnableKeyRotation: true
+      KeyUsage: ENCRYPT_DECRYPT
+      KeyPolicy:
+        Version: "2012-10-17"
+        Id: sns-kms-policy
+        Statement:
+          - Sid: Allow use of the key through SNS by IAM principals of this account
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:CreateGrant
+              - kms:DescribeKey
+            Resource: "*"
+            Condition:
+              StringEquals:
+                kms:CallerAccount: !Ref AWS::AccountId
+                kms:ViaService: !Sub sns.${AWS::Region}.amazonaws.com
+          - Sid: Allow access for Key Administrators
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action:
+              - kms:Create*
+              - kms:Describe*
+              - kms:Enable*
+              - kms:List*
+              - kms:Put*
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+            Resource: "*"
+      Tags:
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-sns"
+
+  KmsKeyAliasSNS:
+    Type: AWS::KMS::Alias
+    Condition: codeBuildErrorEmailProvided
+    Properties:
+      AliasName: !Sub "alias/${nameConvention}/sns"
+      TargetKeyId: !Ref KmsKeySNS
+
+  ## +-------
   ## | SNS Topics (CodeBuild Error)
   ## +---------------
   CodeBuildSNSTopic:
     Type: AWS::SNS::Topic
     Condition: codeBuildErrorEmailProvided
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W47
-            reason: "SNS Topic should specify KmsMasterKeyId property"
     Properties:
       TopicName: !Sub "${nameConvention}-CodeBuildSNSTopic"
+      KmsMasterKeyId: !Ref KmsKeySNS
 
   CodeBuildSNSSubscription:
     Condition: codeBuildErrorEmailProvided
@@ -275,6 +344,13 @@ Resources:
             Effect: Allow
             Action: sns:Publish
             Resource: !Ref CodeBuildSNSTopic
+          # Required to publish to the KMS encrypted topic (publisher side permissions)
+          - Sid: KMSPermission
+            Effect: Allow
+            Action:
+              - kms:GenerateDataKey*
+              - kms:Decrypt
+            Resource: !GetAtt KmsKeySNS.Arn
           - Sid: CodebuildLogs
             Effect: Allow
             Resource:
@@ -398,14 +474,19 @@ Resources:
         - Key: "Name"
           Value: !Sub "${nameConvention}-PipelineToSNSLambda"
 
+  # Allows CloudWatch Logs to invoke the function, restricted to the subscription filters of the
+  # CodeBuild log groups created by this stack (SourceArn + SourceAccount).
+  # logs.amazonaws.com is the service principal documented for subscription filters:
+  # https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/SubscriptionFilters.html#LambdaFunctionExample
   PipelineToSNSLambdaPermission:
     Type: AWS::Lambda::Permission
     Condition: codeBuildErrorEmailProvided
     Properties:
       FunctionName: !GetAtt PipelineToSNSLambda.Arn
       Action: lambda:InvokeFunction
-      Principal: !Sub "logs.${AWS::Region}.amazonaws.com"
-      SourceAccount: !Sub "${AWS::AccountId}"
+      Principal: logs.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${nameConvention}-*:*"
 
   ## +-------
   ## | CW Log Subscriptions
@@ -1148,15 +1229,103 @@ Resources:
 
 
   ## +-------
-  ## | S3 Bucket Artifact
+  ## | S3 Bucket (Server Access Logs)
+  ## | Destination of the server access logs of tfStateBucket and artifactsBucket.
+  ## | Constraints from https://docs.aws.amazon.com/AmazonS3/latest/userguide/enable-server-access-logging.html:
+  ## |   - the destination bucket must use SSE-S3 (AES256), SSE-KMS is not supported for log delivery
+  ## |   - the destination bucket must not have Object Lock / default retention
+  ## |   - the destination bucket must not log to itself (log loop), so access logging is not enabled here
   ## +---------------
-  tfStateBucket:
+  accessLogsBucket:
     Type: "AWS::S3::Bucket"
     Metadata:
       cfn_nag:
         rules_to_suppress:
           - id: W35
-            reason: "There is no need to enable log in this bucket."
+            reason: "Destination bucket of the server access logs. Logging it to itself creates a log loop, which AWS does not recommend."
+      checkov:
+        skip:
+          - id: CKV_AWS_18
+            comment: "Destination bucket of the server access logs. Logging it to itself creates a log loop, which AWS does not recommend."
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_LOGGING_ENABLED  # destination bucket of the server access logs (log loop)
+          - S3_BUCKET_DEFAULT_LOCK_ENABLED  # buckets with Object Lock cannot receive server access logs
+    Properties:
+      BucketName: !Sub "${s3NameConvention}-${AWS::AccountId}-access-logs"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: "AES256"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireAccessLogs
+            Status: Enabled
+            ExpirationInDays: 365
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-access-logs"
+
+  # Grants the S3 log delivery service principal write access, restricted to logs coming from the
+  # two buckets of this stack. The source ARNs are built from the bucket names (instead of !Ref) to
+  # avoid a circular dependency: the source buckets depend on this policy existing before their
+  # LoggingConfiguration is applied. Keep them in sync with the BucketName of tfStateBucket and artifactsBucket.
+  accessLogsBucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket: !Ref accessLogsBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: HTTPSOnly
+            Effect: Deny
+            Principal:
+              AWS: "*"
+            Action:
+              - s3:*
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::${accessLogsBucket}/*
+              - !Sub arn:${AWS::Partition}:s3:::${accessLogsBucket}
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Sid: S3ServerAccessLogsPolicy
+            Effect: Allow
+            Principal:
+              Service: logging.s3.amazonaws.com
+            Action:
+              - s3:PutObject
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::${accessLogsBucket}/*
+            Condition:
+              ArnLike:
+                aws:SourceArn:
+                  - !Sub arn:${AWS::Partition}:s3:::${s3NameConvention}-${AWS::AccountId}-tf-state
+                  - !Sub arn:${AWS::Partition}:s3:::${s3NameConvention}-${AWS::AccountId}-artfcs
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  ## +-------
+  ## | S3 Bucket Terraform State
+  ## +---------------
+  tfStateBucket:
+    Type: "AWS::S3::Bucket"
+    # The log delivery permission must exist before S3 accepts the LoggingConfiguration
+    DependsOn: accessLogsBucketPolicy
     Properties:
       BucketName: !Sub "${s3NameConvention}-${AWS::AccountId}-tf-state"
       VersioningConfiguration:
@@ -1174,6 +1343,9 @@ Resources:
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerEnforced
+      LoggingConfiguration:
+        DestinationBucketName: !Ref accessLogsBucket
+        LogFilePrefix: tf-state/
       Tags: 
         - Key: "Name"
           Value: !Sub "${nameConvention}-tf-state"
@@ -1214,11 +1386,8 @@ Resources:
   ## +---------------
   artifactsBucket:
     Type: "AWS::S3::Bucket"
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W35
-            reason: "There is no need to enable log in this bucket."
+    # The log delivery permission must exist before S3 accepts the LoggingConfiguration
+    DependsOn: accessLogsBucketPolicy
     Properties:
       BucketName: !Sub "${s3NameConvention}-${AWS::AccountId}-artfcs"
       VersioningConfiguration:
@@ -1236,6 +1405,9 @@ Resources:
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerEnforced
+      LoggingConfiguration:
+        DestinationBucketName: !Ref accessLogsBucket
+        LogFilePrefix: artifacts/
       Tags: 
         - Key: "Name"
           Value: !Sub "${nameConvention}-artfcs"
@@ -1271,7 +1443,8 @@ Resources:
     Properties:
       Description: KMS Key for S3
       Enabled: True
-      EnableKeyRotation: false
+      # Automatic rotation is transparent for existing objects: KMS keeps the previous key material
+      EnableKeyRotation: true
       KeyUsage: ENCRYPT_DECRYPT
       KeyPolicy:
         Version: "2012-10-17"
@@ -1337,14 +1510,22 @@ Resources:
     Properties:
       RoleName: !Sub ${nameConvention}-pipelinetrigger-write
       Description: "Role that the Lambda will use to trigger pipeline"
+      # Only the Lambda execution role created by iam-identitycenter-organization.yaml
+      # (<mgmtNameConvention>-assumerole-write) in the management account can assume this role.
+      # The account root is kept as Principal, with the role pinned through aws:PrincipalArn, because
+      # this stack is deployed before the management account stack: IAM rejects a trust policy that
+      # names a role that does not exist yet ("Invalid principal in policy").
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
-              AWS: !Sub ${mgmtAccountId}
+              AWS: !Sub arn:${AWS::Partition}:iam::${mgmtAccountId}:root
             Action:
               - "sts:AssumeRole"
+            Condition:
+              ArnEquals:
+                aws:PrincipalArn: !Sub arn:${AWS::Partition}:iam::${mgmtAccountId}:role/${mgmtNameConvention}-assumerole-write
       Path: "/"
       Policies:
         - PolicyName: !Sub ${nameConvention}-pipelinetrigger

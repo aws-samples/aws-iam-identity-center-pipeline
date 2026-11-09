@@ -180,7 +180,6 @@
                     "ec2:DeleteRoute",
                     "ec2:DeleteRouteTable",
                     "ec2:DeleteSecurityGroup",
-                    "ec2:DeleteVolume",
                     "ec2:DeleteVpcPeeringConnection",
                     "ec2:DetachClassicLinkVpc",
                     "ec2:DisableVpcClassicLink",
