@@ -96,7 +96,10 @@ def update_general_information(permissionSet, permissionSetArn, client):
         )
         log.info(f"[PS: {permissionSet['Name']}] " + "Successfully updated general information")
     except Exception as e:
-        log.error('It was not possible to update Permission Set general information. Reason: ' + str(e))
+        # Bandit B608 (SQL injection) is a false positive: this concatenation only builds a log message.
+        # No SQL is used anywhere in this pipeline; the words "update ... Set" in the text match the
+        # B608 pattern "update <...> set". Nothing was changed, the finding is suppressed below.
+        log.error('It was not possible to update Permission Set general information. Reason: ' + str(e))  # nosec B608
         exit(1)
 
 ###################
@@ -288,7 +291,10 @@ def update_permission_boundary(permissionSet, permissionSetArn, client):
                 exit(1)
     else:
         # Try to delete boundary
-        log.info(f"[PS: {permissionSet['Name']}] " + "No Permission Boundary found in code, thus it will be delete from permission set")
+        # Bandit B608 (SQL injection) is a false positive: this concatenation only builds a log message.
+        # No SQL is used anywhere in this pipeline; the words "delete from" in the text match the
+        # B608 pattern "delete from". Nothing was changed, the finding is suppressed below.
+        log.info(f"[PS: {permissionSet['Name']}] " + "No Permission Boundary found in code, thus it will be delete from permission set")  # nosec B608
         try:
             response = client.delete_permissions_boundary_from_permission_set(
                 InstanceArn=ssoInstanceArn,

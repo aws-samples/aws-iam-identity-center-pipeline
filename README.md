@@ -13,3 +13,7 @@ The code in this repository helps you set up the following target architecture.
 ![Architecture](pictures/aws-iam-identitycenter.png)
 
 For prerequisites and instructions for using this AWS Prescriptive Guidance pattern, see [Manage AWS IAM Identity Center permission sets as code by using AWS CodePipeline](https://docs.aws.amazon.com/prescriptive-guidance/latest/patterns/manage-aws-iam-identity-center-permission-sets-as-code-by-using-aws-codepipeline.html).
+
+## Sample permission sets
+
+The files in `templates/permissionsets/` are examples of job-function personas (administrator, product owner, database, network, operations and security). They are intentionally broad, mirror AWS managed job-function policies where one exists, and must be tailored (resources, conditions, regions, assignment targets) before being used in production. Least privilege for these personas comes from the assignment scope (`templates/assignments/`) and from your SCPs as much as from the policy itself.

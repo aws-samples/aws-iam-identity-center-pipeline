@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [2.2.0] - 2026-11-09
+Security hardening release that addresses the HIGH findings of the security scan (cfn-guard, Checkov, cfn-lint/ACAT, Bandit and IAM least privilege review). Findings that are false positives or accepted for sample content are documented next to the code (YAML comments, `# nosec` comments and the `Comments` key of the permission set templates).
+### Added
+- New CloudFormation parameter `mgmtNameConvention` in `iam-identitycenter-pipeline.yaml` (default `iam-identitycenter`, the default `nameConvention` of `iam-identitycenter-organization.yaml`). It is used to pin the trust policy of the `*-pipelinetrigger-write` role to the Lambda execution role of the management account. If you deployed the organization template with a custom `nameConvention`, set this parameter to the same value when updating the pipeline stack, otherwise the "account moved" trigger stops working.
+- Customer managed KMS key (`alias/<nameConvention>/sns`, rotation enabled) that encrypts the CodeBuild error SNS topic. The notification Lambda role received the matching `kms:GenerateDataKey*`/`kms:Decrypt` permissions.
+- S3 bucket `<s3NameConvention>-<accountId>-access-logs` that receives the server access logs of the Terraform state and artifacts buckets (SSE-S3, versioned, HTTPS only, 365 days retention). Access logging is now enabled on both buckets.
+### Changed
+- Trust policy of the `*-pipelinetrigger-write` role no longer trusts the whole management account: the account root stays as principal, but an `aws:PrincipalArn` condition restricts it to the `<mgmtNameConvention>-assumerole-write` role.
+- `AWS::Lambda::Permission` of the notification Lambda uses the `logs.amazonaws.com` service principal and is restricted with `SourceArn` to the CodeBuild log groups of the stack (in addition to `SourceAccount`).
+- Automatic key rotation enabled on the S3 KMS key (`alias/<nameConvention>/s3`).
+- Sample `OperationEngineer` permission set: `organizations:*` replaced by read-only `organizations:Describe*`/`organizations:List*`.
+- Sample `NetworkAdministrator` permission set: `ec2:DeleteVolume` removed.
+### Fixed
+- N/A
+
 ## [2.1.0] - 2026-04-01
 ### Added
 - Add export scripts for extracting existing IAM Identity Center permission sets and account assignments into pipeline-compatible JSON format, with support for filtering by account, permission set, active/inactive principals, and AWS-managed vs custom permission sets
