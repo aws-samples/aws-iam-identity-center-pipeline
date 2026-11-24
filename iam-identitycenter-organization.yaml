@@ -89,10 +89,32 @@ Resources:
           - "Arn"
 
 ## +-------
+## | Lambda Dead-Letter Queue (Trigger)
+## | EventBridge invokes the Lambda asynchronously. MoveAccount events that still fail after the retries
+## | of the asynchronous invocation (e.g. the pipeline account role could not be assumed) are kept here
+## | for 14 days instead of being dropped, so the pipeline can be started manually for them.
+## | Encrypted with the AWS managed key aws/sqs: the only producer is the Lambda execution role of this
+## | account, which that key policy already authorizes through SQS. Replace KmsMasterKeyId by a customer
+## | managed key if your organization requires one for all queues.
+## +---------------
+  triggerPipelineDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${nameConvention}-moveou-trigger-dlq
+      KmsMasterKeyId: alias/aws/sqs
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-moveou-trigger-dlq"
+
+## +-------
 ## | Lambda (Trigger)
 ## +---------------
   triggerPipelineLambda:
     Type: 'AWS::Lambda::Function'
+    # The code assumes the pipeline account role when the function is initialized, so the role
+    # permissions (managed policy) must be attached before the first invocation
+    DependsOn: LambdaTriggerRolePolicy
     Metadata:
       cfn_nag:
         rules_to_suppress:
@@ -103,6 +125,8 @@ Resources:
     Properties:
       FunctionName: !Sub ${nameConvention}-moveou-trigger
       Handler: 'index.lambda_handler'
+      DeadLetterConfig:
+        TargetArn: !GetAtt triggerPipelineDLQ.Arn
       Environment:
         Variables:
           PIPELINE_NAME:
@@ -146,6 +170,10 @@ Resources:
 
 ## +-------
 ## | IAM Role (Lambda Trigger)
+## | Permissions are attached as a customer managed policy (IAM_NO_INLINE_POLICY_CHECK).
+## | The role name is part of the trust policy of the pipeline account role
+## | (<identityCenterAccountNameConvention>-pipelinetrigger-write): keep nameConvention equal to the
+## | mgmtNameConvention parameter of iam-identitycenter-pipeline.yaml.
 ## +---------------
   LambdaTriggerRole:
     Type: 'AWS::IAM::Role'
@@ -168,17 +196,30 @@ Resources:
       Path: '/'
       ManagedPolicyArns:
       - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
-      Policies:
-      - PolicyName: !Sub ${nameConvention}-moveou
-        PolicyDocument:
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-assumerole-write"
+
+  LambdaTriggerRolePolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      Description: 'Permissions of the Lambda that starts the pipeline when an account is moved'
+      ManagedPolicyName: !Sub ${nameConvention}-moveou
+      Roles:
+        - !Ref LambdaTriggerRole
+      PolicyDocument:
           Version: 2012-10-17        
           Statement:
-            - Sid: CodeComitPerm
+            - Sid: AssumePipelineTriggerRole
               Effect: Allow
               Action:
                 - sts:AssumeRole
               Resource:
                 - !Sub 'arn:${AWS::Partition}:iam::${identityCenterAccountId}:role/${identityCenterAccountNameConvention}-pipelinetrigger-write'
-      Tags: 
-        - Key: "Name"
-          Value: !Sub "${nameConvention}-assumerole-write"
+            # Lambda delivers failed asynchronous events to the dead-letter queue with this role
+            - Sid: DeadLetterQueue
+              Effect: Allow
+              Action:
+                - sqs:SendMessage
+              Resource:
+                - !GetAtt triggerPipelineDLQ.Arn

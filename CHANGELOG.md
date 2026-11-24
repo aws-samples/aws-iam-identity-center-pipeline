@@ -5,17 +5,29 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [2.2.0] - 2026-11-09
-Security hardening release that addresses the HIGH findings of the security scan (cfn-guard, Checkov, cfn-lint/ACAT, Bandit and IAM least privilege review). Findings that are false positives or accepted for sample content are documented next to the code (YAML comments, `# nosec` comments and the `Comments` key of the permission set templates).
+Security hardening release that addresses the HIGH, MEDIUM and LOW findings of the security scan (cfn-guard, Checkov, cfn-lint/ACAT, Semgrep, Bandit and IAM least privilege review). Findings that are false positives or accepted for sample content are documented next to the code (YAML comments and `# nosec` comments) and in the "Sample permission sets" section of the README.
+
+Upgrade notes for an existing deployment:
+- If you deployed `iam-identitycenter-organization.yaml` with a custom `nameConvention`, set the new `mgmtNameConvention` parameter of the pipeline stack to the same value, otherwise the "account moved" trigger can no longer assume the pipeline role.
+- The IAM role permissions moved from inline policies to customer managed policies. During the stack update there is a short window in which the roles have no permissions; do not run the pipeline while the update is in progress.
+- `cwLGRetentionInDays` now only accepts the retention values supported by CloudWatch Logs (1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653).
 ### Added
-- New CloudFormation parameter `mgmtNameConvention` in `iam-identitycenter-pipeline.yaml` (default `iam-identitycenter`, the default `nameConvention` of `iam-identitycenter-organization.yaml`). It is used to pin the trust policy of the `*-pipelinetrigger-write` role to the Lambda execution role of the management account. If you deployed the organization template with a custom `nameConvention`, set this parameter to the same value when updating the pipeline stack, otherwise the "account moved" trigger stops working.
-- Customer managed KMS key (`alias/<nameConvention>/sns`, rotation enabled) that encrypts the CodeBuild error SNS topic. The notification Lambda role received the matching `kms:GenerateDataKey*`/`kms:Decrypt` permissions.
+- New CloudFormation parameter `mgmtNameConvention` in `iam-identitycenter-pipeline.yaml` (default `iam-identitycenter`, the default `nameConvention` of `iam-identitycenter-organization.yaml`). It is used to pin the trust policy of the `*-pipelinetrigger-write` role to the Lambda execution role of the management account.
+- Customer managed KMS key (`alias/<nameConvention>/sns`, rotation enabled) that encrypts the CodeBuild error SNS topic and the dead-letter queue of the notification Lambda. The notification Lambda role received the matching `kms:GenerateDataKey*`/`kms:Decrypt` permissions.
 - S3 bucket `<s3NameConvention>-<accountId>-access-logs` that receives the server access logs of the Terraform state and artifacts buckets (SSE-S3, versioned, HTTPS only, 365 days retention). Access logging is now enabled on both buckets.
+- SQS dead-letter queues for the two asynchronously invoked Lambda functions: `<nameConvention>-PipelineToSNSLambda-dlq` in the pipeline stack and `<nameConvention>-moveou-trigger-dlq` in the organization stack (14 days retention). Failed events are kept instead of being dropped.
+- SHA256 verification of the Terraform archive downloaded in the Assignments build.
 ### Changed
 - Trust policy of the `*-pipelinetrigger-write` role no longer trusts the whole management account: the account root stays as principal, but an `aws:PrincipalArn` condition restricts it to the `<mgmtNameConvention>-assumerole-write` role.
 - `AWS::Lambda::Permission` of the notification Lambda uses the `logs.amazonaws.com` service principal and is restricted with `SourceArn` to the CodeBuild log groups of the stack (in addition to `SourceAccount`).
 - Automatic key rotation enabled on the S3 KMS key (`alias/<nameConvention>/s3`).
+- All IAM roles of both templates (CodePipeline, CodeCommit trigger, the three CodeBuild service roles, the pipeline trigger role and the management account Lambda role) now receive their permissions through customer managed policies named after the role, instead of inline policies. The permissions themselves are unchanged except for the two items below.
+- CodeBuild permission set role: KMS permissions scoped to the S3/CodeBuild key instead of `Resource: "*"`.
+- CodeBuild assignments role: `iam:CreateRole`, `iam:PutRolePolicy` and `iam:AttachRolePolicy` removed. They came from the 1.x design, when the pipeline ran in the management account; Identity Center provisions the `AWSReservedSSO_*` roles through its service-linked role and nothing in the Assignments stage calls an IAM write API.
+- `cwLGRetentionInDays` parameter is now of type `Number` with `AllowedValues`.
 - Sample `OperationEngineer` permission set: `organizations:*` replaced by read-only `organizations:Describe*`/`organizations:List*`.
 - Sample `NetworkAdministrator` permission set: `ec2:DeleteVolume` removed.
+- Sample `ProductionAccess` permission set: `iam:PassRole` moved to a statement with the condition `iam:PassedToService` (EC2, ECS, Systems Manager, Auto Scaling).
 ### Fixed
 - N/A
 
