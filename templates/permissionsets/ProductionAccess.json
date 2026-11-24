@@ -5,7 +5,7 @@
     "ManagedPolicies": [
         "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess"
     ],
-    "CustomPolicy":{
+    "CustomPolicy": {
         "Version": "2012-10-17",
         "Statement": [
             {
@@ -15,7 +15,7 @@
                     "autoscaling-plans:UpdateScalingPlan",
                     "autoscaling:PutScheduledUpdateGroupAction",
                     "autoscaling:SetDesiredCapacity",
-                    "autoscaling:UpdateAutoScalingGroup",                
+                    "autoscaling:UpdateAutoScalingGroup",
                     "aws-portal:ViewAccount",
                     "aws-portal:ViewBilling",
                     "aws-portal:ViewPaymentMethods",
@@ -27,20 +27,19 @@
                     "ec2:StartInstances",
                     "ec2:RebootInstances",
                     "ec2:TerminateInstances",
-                    "ec2:RunInstances",          
+                    "ec2:RunInstances",
                     "ecs:StopTask",
                     "ecs:StartTask",
-                    "ecs:UpdateService",                      
+                    "ecs:UpdateService",
                     "eks:AccessKubernetesApi",
                     "eks:Describe*",
                     "eks:ListTagsForResource",
                     "iam:Get*",
                     "iam:*CredentialReport",
                     "iam:CreateServiceLinkedRole",
-                    "iam:PassRole",
                     "logs:GetLogEvents",
                     "route53domains:Get*",
-                    "route53domains:List*",                
+                    "route53domains:List*",
                     "ssm:DescribeSessions",
                     "ssm:ResumeSession",
                     "ssm:TerminateSession",
@@ -52,9 +51,24 @@
                     "wellarchitected:*"
                 ],
                 "Resource": "*"
+            },
+            {
+                "Sid": "ProductionPassRoleToComputeServices",
+                "Effect": "Allow",
+                "Action": "iam:PassRole",
+                "Resource": "*",
+                "Condition": {
+                    "StringEquals": {
+                        "iam:PassedToService": [
+                            "ec2.amazonaws.com",
+                            "ecs-tasks.amazonaws.com",
+                            "ecs.amazonaws.com",
+                            "ssm.amazonaws.com",
+                            "autoscaling.amazonaws.com"
+                        ]
+                    }
+                }
             }
         ]
     }
 }
-
-

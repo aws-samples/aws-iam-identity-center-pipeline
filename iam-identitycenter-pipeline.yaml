@@ -71,8 +71,11 @@ Parameters:
     Default: "iam-identitycenter"
   cwLGRetentionInDays:
     Description: "Specify the retention time in days for logs within CloudWatch Log Groups"
-    Type: String
+    Type: Number
     Default: 365
+    # Values accepted by AWS::Logs::LogGroup RetentionInDays. Rejecting anything else at deploy time
+    # is what makes the log groups below always have a valid retention.
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
   providerType:
     Description: "Repository provider. CodeCommit creates an AWS CodeCommit repository in this account. The other values use an AWS CodeConnections connection to an external repository"
     Type: String
@@ -129,19 +132,20 @@ Conditions:
 
 Resources:
   ## +-------
-  ## | KMS Key (CodeBuild Error SNS Topic)
-  ## | Customer managed key used to encrypt the messages published to CodeBuildSNSTopic.
-  ## | Usage is delegated to IAM principals of this account through SNS (same model as the
-  ## | AWS managed key aws/sns). The publisher (PipelineToSNSRole) gets kms:GenerateDataKey*
-  ## | and kms:Decrypt in PipelineToSNSRolePolicy. If an AWS service (e.g. EventBridge) ever
-  ## | publishes to the topic, add its service principal to this key policy as described in
+  ## | KMS Key (CodeBuild Error Notifications: SNS Topic and Lambda Dead-Letter Queue)
+  ## | Customer managed key used to encrypt the messages published to CodeBuildSNSTopic and the
+  ## | failed events stored in PipelineToSNSDLQ. Usage is delegated to IAM principals of this
+  ## | account through SNS and SQS (same model as the AWS managed keys aws/sns and aws/sqs).
+  ## | The producer (PipelineToSNSRole) gets kms:GenerateDataKey* and kms:Decrypt in
+  ## | PipelineToSNSRolePolicy. If an AWS service (e.g. EventBridge) ever publishes to the topic,
+  ## | add its service principal to this key policy as described in
   ## | https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html
   ## +---------------
   KmsKeySNS:
     Type: AWS::KMS::Key
     Condition: codeBuildErrorEmailProvided
     Properties:
-      Description: KMS key for the CodeBuild error notifications SNS topic
+      Description: KMS key for the CodeBuild error notifications (SNS topic and Lambda dead-letter queue)
       Enabled: true
       EnableKeyRotation: true
       KeyUsage: ENCRYPT_DECRYPT
@@ -149,7 +153,7 @@ Resources:
         Version: "2012-10-17"
         Id: sns-kms-policy
         Statement:
-          - Sid: Allow use of the key through SNS by IAM principals of this account
+          - Sid: Allow use of the key through SNS and SQS by IAM principals of this account
             Effect: Allow
             Principal:
               AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
@@ -164,7 +168,9 @@ Resources:
             Condition:
               StringEquals:
                 kms:CallerAccount: !Ref AWS::AccountId
-                kms:ViaService: !Sub sns.${AWS::Region}.amazonaws.com
+                kms:ViaService:
+                  - !Sub sns.${AWS::Region}.amazonaws.com
+                  - !Sub sqs.${AWS::Region}.amazonaws.com
           - Sid: Allow access for Key Administrators
             Effect: Allow
             Principal:
@@ -238,6 +244,10 @@ Resources:
 
   ## +-------
   ## | CloudWatch Log Groups (Lambda and CodeBuild)
+  ## | CW_LOGGROUP_RETENTION_PERIOD_CHECK (cfn-guard) is a false positive on these log groups: the rule
+  ## | compares RetentionInDays with a list of integers and cannot resolve the !Ref to the parameter
+  ## | cwLGRetentionInDays. The parameter only accepts the values valid for RetentionInDays (see its
+  ## | AllowedValues), so the deployed retention is always valid. The rule is suppressed for that reason.
   ## +---------------
   PipelineLogGroupAssignments:
     Type: AWS::Logs::LogGroup
@@ -246,6 +256,9 @@ Resources:
         rules_to_suppress:
           - id: W84
             reason: "CloudWatchLogs LogGroup should specify a KMS Key Id to encrypt the log data"
+      guard:
+        SuppressedRules:
+          - CW_LOGGROUP_RETENTION_PERIOD_CHECK  # value comes from the validated parameter cwLGRetentionInDays
     Properties:
       LogGroupName: !Sub "/aws/codebuild/${nameConvention}-assignments"
       RetentionInDays: !Ref cwLGRetentionInDays
@@ -260,6 +273,9 @@ Resources:
         rules_to_suppress:
           - id: W84 
             reason: "CloudWatchLogs LogGroup should specify a KMS Key Id to encrypt the log data"
+      guard:
+        SuppressedRules:
+          - CW_LOGGROUP_RETENTION_PERIOD_CHECK  # value comes from the validated parameter cwLGRetentionInDays
     Properties:
       LogGroupName: !Sub "/aws/codebuild/${nameConvention}-templatevalidation"
       RetentionInDays: !Ref cwLGRetentionInDays
@@ -274,6 +290,9 @@ Resources:
         rules_to_suppress:
           - id: W84 
             reason: "CloudWatchLogs LogGroup should specify a KMS Key Id to encrypt the log data"
+      guard:
+        SuppressedRules:
+          - CW_LOGGROUP_RETENTION_PERIOD_CHECK  # value comes from the validated parameter cwLGRetentionInDays
     Properties:
       LogGroupName: !Sub "/aws/codebuild/${nameConvention}-permissionset"
       RetentionInDays: !Ref cwLGRetentionInDays
@@ -289,6 +308,9 @@ Resources:
         rules_to_suppress:
           - id: W84 
             reason: "CloudWatchLogs LogGroup should specify a KMS Key Id to encrypt the log data"
+      guard:
+        SuppressedRules:
+          - CW_LOGGROUP_RETENTION_PERIOD_CHECK  # value comes from the validated parameter cwLGRetentionInDays
     Properties:
       LogGroupName: !Sub "/aws/lambda/${nameConvention}-PipelineToSNSLambda"
       RetentionInDays: !Ref cwLGRetentionInDays
@@ -344,7 +366,12 @@ Resources:
             Effect: Allow
             Action: sns:Publish
             Resource: !Ref CodeBuildSNSTopic
-          # Required to publish to the KMS encrypted topic (publisher side permissions)
+          # Lambda delivers failed asynchronous events to the dead-letter queue with this role
+          - Sid: DeadLetterQueue
+            Effect: Allow
+            Action: sqs:SendMessage
+            Resource: !GetAtt PipelineToSNSDLQ.Arn
+          # Required to publish to the KMS encrypted topic and queue (producer side permissions)
           - Sid: KMSPermission
             Effect: Allow
             Action:
@@ -361,11 +388,30 @@ Resources:
         - Ref: "PipelineToSNSRole"
 
   ## +-------
+  ## | Lambda Dead-Letter Queue (Pipeline Failure Notifications)
+  ## | CloudWatch Logs invokes PipelineToSNSLambda asynchronously. Events that still fail after the
+  ## | retries of the asynchronous invocation are kept here (14 days) instead of being dropped.
+  ## +---------------
+  PipelineToSNSDLQ:
+    Type: AWS::SQS::Queue
+    Condition: codeBuildErrorEmailProvided
+    Properties:
+      QueueName: !Sub "${nameConvention}-PipelineToSNSLambda-dlq"
+      KmsMasterKeyId: !Ref KmsKeySNS
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-PipelineToSNSLambda-dlq"
+
+  ## +-------
   ## | Lambda (Pipeline Failure Notifications)
   ## +---------------
   PipelineToSNSLambda:
     Type: AWS::Lambda::Function
     Condition: codeBuildErrorEmailProvided
+    # The role permissions (SNS, SQS, KMS, logs) live in the managed policy, which must be attached
+    # before the first invocation
+    DependsOn: PipelineToSNSRolePolicy
     Metadata:
       cfn_nag:
         rules_to_suppress:
@@ -377,6 +423,8 @@ Resources:
             reason: "Lambda functions require permission to write CloudWatch Logs"
     Properties:
       FunctionName: !Sub "${nameConvention}-PipelineToSNSLambda"
+      DeadLetterConfig:
+        TargetArn: !GetAtt PipelineToSNSDLQ.Arn
       Code:
         ZipFile:
           Fn::Sub: |
@@ -526,6 +574,8 @@ Resources:
   ## +---------------
   Pipeline:
     Type: AWS::CodePipeline::Pipeline
+    # CodePipeline starts a first execution right after creation; the role permissions must be attached by then
+    DependsOn: PipelineRolePolicy
     Properties:
       RoleArn: !GetAtt PipelineRole.Arn
       Name: !Sub "${nameConvention}-pipeline"
@@ -609,14 +659,14 @@ Resources:
 
   ## +-------
   ## | IAM Role (CodePipeline)
+  ## | Permissions are attached as customer managed policies (IAM_NO_INLINE_POLICY_CHECK), same pattern
+  ## | as PipelineToSNSRole / PipelineToSNSRolePolicy. This applies to every role of this template.
   ## +---------------
   PipelineRole:
     Type: "AWS::IAM::Role"
     Metadata:
       cfn_nag:
         rules_to_suppress:
-          - id: W11
-            reason: "ListAllMyBuckets requires * in Resource"
           - id: W28
             reason: "Fixed name required to future references"
     Properties:
@@ -632,9 +682,24 @@ Resources:
             Action:
               - sts:AssumeRole
       Path: "/"
-      Policies:
-        - PolicyName: !Sub ${nameConvention}-codepipeline-write
-          PolicyDocument:
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-codepipeline-write"
+
+  PipelineRolePolicy:
+    Type: "AWS::IAM::ManagedPolicy"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W13
+            reason: "ListAllMyBuckets requires * in Resource"
+    Properties:
+      Description: "Permissions of the CodePipeline role"
+      ManagedPolicyName: !Sub ${nameConvention}-codepipeline-write
+      Roles:
+        - !Ref PipelineRole
+      PolicyDocument:
+            Version: "2012-10-17"
             Statement:
               - Sid: CodeBuildAccess
                 Effect: Allow
@@ -680,10 +745,6 @@ Resources:
                   Resource:
                     - !GetAtt IdentityCenterConnection.ConnectionArn
 
-      Tags: 
-        - Key: "Name"
-          Value: !Sub "${nameConvention}-codepipeline-write"
-
   ## +-------
   ## | Repository (Identity Center Management)
   ## | providerType CodeCommit: CodeCommit repository in this account
@@ -726,6 +787,7 @@ Resources:
   triggerPipelineCodeChange:
     Type: AWS::Events::Rule
     Condition: useCodeCommit
+    DependsOn: triggerPipelineCodeChangeRolePolicy
     Properties:
       Name: !Sub "${nameConvention}-codechange-trigger"
       Description: "Rule to trigger the CodePipeline based on changes in the main branch of the CodeCommit repository"
@@ -778,9 +840,19 @@ Resources:
               ArnLike:
                 aws:SourceArn: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${nameConvention}-codechange-trigger"
       Path: "/"
-      Policies:
-        - PolicyName: !Sub ${nameConvention}-codecommittrigger-write
-          PolicyDocument:
+      Tags:
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-codecommittrigger-write"
+
+  triggerPipelineCodeChangeRolePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: useCodeCommit
+    Properties:
+      Description: "Permissions of the EventBridge role that starts the pipeline on CodeCommit changes"
+      ManagedPolicyName: !Sub ${nameConvention}-codecommittrigger-write
+      Roles:
+        - !Ref triggerPipelineCodeChangeRole
+      PolicyDocument:
             Version: 2012-10-17
             Statement:
               - Sid: CodePipelinePerm
@@ -789,15 +861,14 @@ Resources:
                   - codepipeline:StartPipelineExecution
                 Resource:
                   - !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${nameConvention}-pipeline
-      Tags:
-        - Key: "Name"
-          Value: !Sub "${nameConvention}-codecommittrigger-write"
 
   ## +-------
   ## | CodeBuild Project (Template Validation)
   ## +---------------
   CodebuildTemplateValidation:
     Type: AWS::CodeBuild::Project
+    # The service role permissions must be attached before the pipeline runs the first build
+    DependsOn: RoleCodebuildTemplateValidationPolicy
     Metadata:
       cfn_nag:
         rules_to_suppress:
@@ -840,16 +911,36 @@ Resources:
     Metadata:
       cfn_nag:
         rules_to_suppress:
-          - id: W11
-            reason: "Requires * in Resource to get all policies"
           - id: W28
             reason: "Fixed name required to future references"
     Properties:
       RoleName: !Sub ${nameConvention}-tempvalidation-read
       Description: "Service role for CodeBuild"
-      Policies:
-        - PolicyName: !Sub ${nameConvention}-tempvalidation-read
-          PolicyDocument:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "codebuild.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-tempvalidation-read"
+
+  RoleCodebuildTemplateValidationPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W13
+            reason: "Requires * in Resource to get all policies"
+    Properties:
+      Description: "Permissions of the CodeBuild service role (template validation)"
+      ManagedPolicyName: !Sub ${nameConvention}-tempvalidation-read
+      Roles:
+        - !Ref RoleCodebuildTemplateValidation
+      PolicyDocument:
             Version: 2012-10-17
             Statement:
               - Sid: CodeBuildAccess
@@ -904,23 +995,14 @@ Resources:
                   - "kms:DescribeKey"
                 Resource:
                   - !GetAtt KmsKeyS3.Arn
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: "codebuild.amazonaws.com"
-            Action:
-              - "sts:AssumeRole"
-      Tags: 
-        - Key: "Name"
-          Value: !Sub "${nameConvention}-tempvalidation-read"
 
   ## +-------
   ## | CodeBuild Project (Permission Set)
   ## +---------------
   CodebuildPermissionSet:
     Type: AWS::CodeBuild::Project
+    # The service role permissions must be attached before the pipeline runs the first build
+    DependsOn: RoleCodebuildPermissionSetsPolicy
     Metadata:
       cfn_nag:
         rules_to_suppress:
@@ -963,16 +1045,36 @@ Resources:
     Metadata:
       cfn_nag:
         rules_to_suppress:
-          - id: W11
-            reason: "Requires * in Resource to interact with all Identity Center resources"
           - id: W28
             reason: "Fixed name required to future references"
     Properties:
       RoleName: !Sub ${nameConvention}-permissionset-write
       Description: "Service role for CodeBuild"
-      Policies:
-        - PolicyName: !Sub ${nameConvention}-permissionset-write
-          PolicyDocument:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "codebuild.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-permissionset-write"
+
+  RoleCodebuildPermissionSetsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W13
+            reason: "Requires * in Resource to interact with all Identity Center resources"
+    Properties:
+      Description: "Permissions of the CodeBuild service role (permission sets)"
+      ManagedPolicyName: !Sub ${nameConvention}-permissionset-write
+      Roles:
+        - !Ref RoleCodebuildPermissionSets
+      PolicyDocument:
             Version: 2012-10-17
             Statement:
               - Sid: CodeBuildAccess
@@ -1040,6 +1142,9 @@ Resources:
                   - sso:ListInstances
                 Resource:
                   - "*"
+              # Scoped to the key that encrypts the artifact bucket and the CodeBuild projects, like the
+              # other two CodeBuild roles. Artifacts encrypted by CodePipeline with the AWS managed key
+              # aws/s3 are not affected: that key policy grants usage to the principals of the account by itself.
               - Sid: KMSPermission
                 Effect: Allow
                 Action:
@@ -1049,24 +1154,15 @@ Resources:
                   - "kms:GenerateDataKey*"
                   - "kms:DescribeKey"
                 Resource:
-                  - "*"
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: "codebuild.amazonaws.com"
-            Action:
-              - "sts:AssumeRole"
-      Tags: 
-        - Key: "Name"
-          Value: !Sub "${nameConvention}-permissionset-write"
+                  - !GetAtt KmsKeyS3.Arn
 
   ## +-------
   ## | CodeBuild Project (Assignments)
   ## +---------------
   CodebuildAssignments:
     Type: AWS::CodeBuild::Project
+    # The service role permissions must be attached before the pipeline runs the first build
+    DependsOn: RoleCodebuildAssignmentsPolicy
     Metadata:
       cfn_nag:
         rules_to_suppress:
@@ -1093,6 +1189,13 @@ Resources:
       TimeoutInMinutes: 480
       Source:
         Type: CODEPIPELINE
+        # Terraform is downloaded from HashiCorp (guru/External3PDownload). The archive is pinned to one
+        # version and its SHA256 is verified before installation, so a tampered or corrupted download
+        # fails the build. The expected checksum is the linux_amd64 line of
+        # https://releases.hashicorp.com/terraform/1.14.0/terraform_1.14.0_SHA256SUMS (signed by HashiCorp).
+        # When upgrading Terraform, update the version in the URL, the file name and the checksum together.
+        # If your organization forbids downloads from the internet in builds, host the archive in an
+        # internal S3 bucket or artifact repository and point the wget command to it.
         BuildSpec: |
           version: 0.2
           phases:
@@ -1100,7 +1203,8 @@ Resources:
               commands:
                 - echo "[INFO] [INSTALL] Installing dependencies"
                 - wget https://releases.hashicorp.com/terraform/1.14.0/terraform_1.14.0_linux_amd64.zip
-                - unzip terraform_*_linux_amd64.zip -d /usr/bin/
+                - echo "33ac217458ba8b44ce2813553083bc132c9a07e41a79c2e3627977682d283093  terraform_1.14.0_linux_amd64.zip" | sha256sum -c -
+                - unzip terraform_1.14.0_linux_amd64.zip -d /usr/bin/
                 - chmod +x /usr/bin/terraform
                 - echo "[INFO] [INSTALL] Installing finished"                    
               finally:
@@ -1126,16 +1230,36 @@ Resources:
     Metadata:
       cfn_nag:
         rules_to_suppress:
-          - id: W11
-            reason: "Requires * in Resource to interact with all Identity Center resources"
           - id: W28
             reason: "Fixed name required to future references"
     Properties:
       RoleName: !Sub ${nameConvention}-assignments-write
       Description: "Service role for CodeBuild"
-      Policies:
-        - PolicyName: !Sub ${nameConvention}-assignments-write
-          PolicyDocument:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "codebuild.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-assignments-write"
+
+  RoleCodebuildAssignmentsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W13
+            reason: "Requires * in Resource to interact with all Identity Center resources"
+    Properties:
+      Description: "Permissions of the CodeBuild service role (assignments)"
+      ManagedPolicyName: !Sub ${nameConvention}-assignments-write
+      Roles:
+        - !Ref RoleCodebuildAssignments
+      PolicyDocument:
             Version: 2012-10-17
             Statement:
               - Sid: CodeBuildAccess
@@ -1196,10 +1320,15 @@ Resources:
                   - "sso:ListAccountAssignments"
                   - "identitystore:ListGroups"
                   - "identitystore:ListUsers"
+                  # iam:CreateRole, iam:PutRolePolicy and iam:AttachRolePolicy on "*" were removed from this
+                  # statement (privilege escalation path). They came from the 1.x design, when the pipeline ran
+                  # in the management account and IAM Identity Center still relied on the caller to create the
+                  # AWSReservedSSO_* roles. Identity Center now provisions those roles in every account through
+                  # its service-linked role AWSServiceRoleForSSO, the AWS managed administrator policies for
+                  # Identity Center no longer carry these actions, and nothing in this stage (Python script,
+                  # Terraform aws_ssoadmin_account_assignment) calls an IAM write API. The read-only IAM
+                  # actions below are kept for troubleshooting of the provisioned roles.
                   - "iam:GetSAMLProvider"
-                  - "iam:CreateRole"
-                  - "iam:PutRolePolicy"
-                  - "iam:AttachRolePolicy"
                   - "iam:GetRole"
                   - "iam:ListAttachedRolePolicies"
                   - "iam:ListRolePolicies"
@@ -1215,17 +1344,6 @@ Resources:
                   - "kms:DescribeKey"
                 Resource:
                   - !GetAtt KmsKeyS3.Arn
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: "codebuild.amazonaws.com"
-            Action:
-              - "sts:AssumeRole"
-      Tags: 
-        - Key: "Name"
-          Value: !Sub "${nameConvention}-assignments-write"
 
 
   ## +-------
@@ -1251,6 +1369,7 @@ Resources:
         SuppressedRules:
           - S3_BUCKET_LOGGING_ENABLED  # destination bucket of the server access logs (log loop)
           - S3_BUCKET_DEFAULT_LOCK_ENABLED  # buckets with Object Lock cannot receive server access logs
+          - S3_BUCKET_NO_PUBLIC_RW_ACL  # false positive, see the note on tfStateBucket
     Properties:
       BucketName: !Sub "${s3NameConvention}-${AWS::AccountId}-access-logs"
       VersioningConfiguration:
@@ -1321,11 +1440,30 @@ Resources:
 
   ## +-------
   ## | S3 Bucket Terraform State
+  ## |
+  ## | cfn-guard findings on this bucket and on artifactsBucket that were NOT adjusted:
+  ## | - S3_BUCKET_NO_PUBLIC_RW_ACL ("AccessControl property missing"): false positive. The rule tests
+  ## |   AccessControl != PublicReadWrite and fails when the property is absent. AccessControl is a legacy
+  ## |   property that AWS recommends not to use; these buckets have ObjectOwnership BucketOwnerEnforced
+  ## |   (ACLs disabled, no ACL can grant anything) plus all four PublicAccessBlock settings, so a public
+  ## |   read/write ACL is impossible. Setting AccessControl would add an ACL call to buckets whose ACLs are
+  ## |   disabled and bring back the cfn-lint warning W3045, so the rule is suppressed instead.
+  ## | - S3_BUCKET_DEFAULT_LOCK_ENABLED: not applicable, accepted. Object Lock is a WORM control for
+  ## |   records that must never be deleted. The Terraform state is a working file rewritten on every
+  ## |   pipeline run and the artifact bucket holds transient CodePipeline artifacts; a retention period
+  ## |   would block clean-up of old versions without adding protection. Object Lock also cannot be
+  ## |   enabled on the existing buckets of a deployed stack. Versioning (already enabled) is the
+  ## |   protection that fits this data: deleted or overwritten state and artifacts stay recoverable.
   ## +---------------
   tfStateBucket:
     Type: "AWS::S3::Bucket"
     # The log delivery permission must exist before S3 accepts the LoggingConfiguration
     DependsOn: accessLogsBucketPolicy
+    Metadata:
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_NO_PUBLIC_RW_ACL  # false positive, see the note above
+          - S3_BUCKET_DEFAULT_LOCK_ENABLED  # not applicable to Terraform state, see the note above
     Properties:
       BucketName: !Sub "${s3NameConvention}-${AWS::AccountId}-tf-state"
       VersioningConfiguration:
@@ -1388,6 +1526,11 @@ Resources:
     Type: "AWS::S3::Bucket"
     # The log delivery permission must exist before S3 accepts the LoggingConfiguration
     DependsOn: accessLogsBucketPolicy
+    Metadata:
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_NO_PUBLIC_RW_ACL  # false positive, see the note on tfStateBucket
+          - S3_BUCKET_DEFAULT_LOCK_ENABLED  # not applicable to pipeline artifacts, see the note on tfStateBucket
     Properties:
       BucketName: !Sub "${s3NameConvention}-${AWS::AccountId}-artfcs"
       VersioningConfiguration:
@@ -1527,9 +1670,18 @@ Resources:
               ArnEquals:
                 aws:PrincipalArn: !Sub arn:${AWS::Partition}:iam::${mgmtAccountId}:role/${mgmtNameConvention}-assumerole-write
       Path: "/"
-      Policies:
-        - PolicyName: !Sub ${nameConvention}-pipelinetrigger
-          PolicyDocument:
+      Tags: 
+        - Key: "Name"
+          Value: !Sub "${nameConvention}-pipelinetrigger-write"
+
+  LambdaTriggerRolePolicy:
+    Type: "AWS::IAM::ManagedPolicy"
+    Properties:
+      Description: "Permissions of the role assumed from the management account to start the pipeline"
+      ManagedPolicyName: !Sub ${nameConvention}-pipelinetrigger
+      Roles:
+        - !Ref LambdaTriggerRole
+      PolicyDocument:
             Version: 2012-10-17
             Statement:
               - Sid: CodePipelinePerm
@@ -1538,6 +1690,3 @@ Resources:
                   - codepipeline:StartPipelineExecution
                 Resource:
                   - !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${nameConvention}-pipeline
-      Tags: 
-        - Key: "Name"
-          Value: !Sub "${nameConvention}-pipelinetrigger-write"          
